@@ -58,6 +58,7 @@ struct ShipConnectionInterface {
   DataWriterInterface data_writer_interface;
   /**
    * @brief Transformed from Run()
+   * @return kEebusErrorOk if started ok, error code otherwise
    */
   EebusError (*start)(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator);
   /**
@@ -114,6 +115,7 @@ struct ShipConnectionObject {
 
 /**
  * @brief Ship Connection Start caller definition
+ * @return kEebusErrorOk if started ok, error code otherwise
  */
 #define SHIP_CONNECTION_START(obj, wsc) (SHIP_CONNECTION_INTERFACE(obj)->start(SHIP_CONNECTION_OBJECT(obj), wsc))
 
