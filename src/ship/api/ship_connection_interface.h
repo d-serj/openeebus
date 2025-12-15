@@ -59,7 +59,7 @@ struct ShipConnectionInterface {
   /**
    * @brief Transformed from Run()
    */
-  void (*start)(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator);
+  EebusError (*start)(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator);
   /**
    * @brief Executes close_connection(false, 0, "")
    */

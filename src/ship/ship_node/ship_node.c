@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "ship_node_internal.h"
 #include "src/common/eebus_device_info.h"
@@ -366,6 +367,10 @@ static bool ShipNodeFindService(ShipNode* self, MdnsEntry* found_entry) {
 }
 
 void ShipNodeConnectToService(ShipNode* self, const MdnsEntry* found_entry) {
+  if (self->connection_attempt_running) {
+    return;
+  }
+
   size_t len = strlen(found_entry->host);
   if (len <= 1) {
     return;
@@ -377,24 +382,40 @@ void ShipNodeConnectToService(ShipNode* self, const MdnsEntry* found_entry) {
 
   const char* const uri
       = StringFmtSprintf("wss://%.*s:%d%s", len, found_entry->host, found_entry->port, found_entry->path);
+  if (uri == NULL) {
+    return;
+  }
 
   self->websocket_creator = WebsocketClientCreatorCreate(uri, self->tsl_certificate, self->remote_ski);
-  if ((!self->connection_attempt_running) && (self->websocket_creator != NULL)) {
-    self->ship_connection = ShipConnectionCreate(
-        INFO_PROVIDER_OBJECT(self),
-        kShipRoleClient,
-        self->local_service_details->ship_id,
-        found_entry->ski,
-        ""
-    );
+  StringDelete((char*)uri);
+  if (self->websocket_creator == NULL) {
+    return;
+  }
 
-    self->connection_attempt_running = true;
-    SHIP_CONNECTION_START(self->ship_connection, self->websocket_creator);
-
-    // Delete the websocket creator object after establishing connection
+  self->ship_connection = ShipConnectionCreate(
+      INFO_PROVIDER_OBJECT(self),
+      kShipRoleClient,
+      self->local_service_details->ship_id,
+      found_entry->ski,
+      ""
+  );
+  if (self->ship_connection == NULL) {
     WebsocketCreatorDelete(self->websocket_creator);
     self->websocket_creator = NULL;
+    return;
   }
+
+  const EebusError err = SHIP_CONNECTION_START(self->ship_connection, self->websocket_creator);
+  if (err != kEebusErrorOk) {
+    SHIP_NODE_DEBUG_PRINTF("SHIP starting connection attempt failed (%d)\n", err);
+    ShipConnectionDelete(self->ship_connection);
+    self->ship_connection = NULL;
+  }
+
+  self->connection_attempt_running = (err == kEebusErrorOk);
+
+  WebsocketCreatorDelete(self->websocket_creator);
+  self->websocket_creator = NULL;
 }
 
 void* ShipNodeConnectionLoop(void* ctx) {

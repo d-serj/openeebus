@@ -46,7 +46,7 @@
 #include "src/ship/ship_connection/types.h"
 #include "src/ship/websocket/websocket.h"
 
-static void Start(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator);
+static EebusError Start(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator);
 static void Stop(ShipConnectionObject* self);
 static void Destruct(DataWriterObject* self);
 static void WriteMessage(DataWriterObject* self, const uint8_t* message, size_t messageSize);
@@ -217,13 +217,15 @@ EebusError ShipConnectionTryStart(ShipConnection* self, WebsocketCreatorObject* 
   return kEebusErrorOk;
 }
 
-void Start(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator) {
+EebusError Start(ShipConnectionObject* self, WebsocketCreatorObject* websocket_creator) {
   ShipConnection* const sc = SHIP_CONNECTION(self);
 
   EebusError ret = ShipConnectionTryStart(sc, websocket_creator);
   if (ret != kEebusErrorOk) {
     SHIP_CONNECTION_DEBUG_PRINTF("%s(), start SHIP connection failed\n", __func__);
   }
+
+  return ret;
 }
 
 void Stop(ShipConnectionObject* self) {
