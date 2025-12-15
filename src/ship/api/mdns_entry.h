@@ -145,6 +145,8 @@ MdnsEntrySetValue(MdnsEntry* entry, const char* key_ptr, size_t key_size, const 
 
 bool MdnsEntryIsValid(const MdnsEntry* entry);
 
+const char* MdnsEntryPrint(char* buffer, size_t buffer_size, const MdnsEntry* entry);
+
 static inline const char* MdnsEntryGetName(const MdnsEntry* entry) { return entry->name; }
 
 static inline const char* MdnsEntryGetHost(const MdnsEntry* entry) { return entry->host; }

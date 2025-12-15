@@ -237,3 +237,43 @@ bool MdnsEntryIsValid(const MdnsEntry* entry) {
 
   return is_valid;
 }
+
+const char* MdnsEntryPrint(char* buffer, size_t buffer_size, const MdnsEntry* entry) {
+  if ((buffer == NULL) || (buffer_size == 0) || (entry == NULL)) {
+    return false;
+  }
+
+  int written = snprintf(
+      buffer,
+      buffer_size,
+      "MdnsEntry {\n"
+      "  name: %s\n"
+      "  host: %s\n"
+      "  domain: %s\n"
+      "  port: %u\n"
+      "  iface: %u\n"
+      "  txtvers: %s\n"
+      "  id: %s\n"
+      "  path: %s\n"
+      "  ski: %s\n"
+      "  reg: %s\n"
+      "  brand: %s\n"
+      "  type: %s\n"
+      "  model: %s\n"
+      "}\n",
+      entry->name,
+      entry->host,
+      entry->domain,
+      entry->port,
+      entry->iface,
+      entry->txtvers,
+      entry->id,
+      entry->path,
+      entry->ski,
+      entry->reg,
+      entry->brand,
+      entry->type,
+      entry->model);
+
+  return (written > 0) && ((size_t)written < buffer_size) ? buffer : "<buffer too small>";
+}
