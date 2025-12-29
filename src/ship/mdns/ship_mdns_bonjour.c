@@ -114,6 +114,12 @@ static const struct timeval select_timeout = {
     .tv_usec = 100000,
 };
 
+// Allow extra time for Avahi/Bonjour resolve responses before moving to the next browse cycle.
+static const struct timeval mdns_resolve_timeout = {
+    .tv_sec  = 1,
+    .tv_usec = 0,
+};
+
 typedef struct Mdns Mdns;
 
 /** Tracks a single pending DNSServiceResolve call */
@@ -193,10 +199,11 @@ static void MdnsConstruct(
 static ActiveResolveEntry* MdnsActiveResolveEntryCreate(Mdns* owner, MdnsEntry* entry);
 static void MdnsActiveResolveEntryDestroy(ActiveResolveEntry* resolve);
 static void MdnsActiveResolveEntryDeallocator(void* resolve);
-static void MdnsRemoveActiveResolve(Mdns* mdns, ActiveResolveEntry* resolve);
 static bool MdnsHasMatchingEntry(const Mdns* mdns, const MdnsEntry* candidate);
+static bool MdnsHandleSelectResult(int result, bool* retry);
+static void MdnsProcessBrowseResults(Mdns* self);
+static void MdnsProcessResolveResults(Mdns* self);
 static void MdnsProcessActiveResolves(Mdns* self, fd_set* readfds);
-static void MdnsProcessResults(Mdns* self);
 static inline uint16_t OpaquePortToUint16(uint16_t opaque_port);
 static void MdnsResolveServiceCallback(
     DNSServiceRef service_ref,
@@ -324,15 +331,6 @@ void MdnsActiveResolveEntryDeallocator(void* resolve) {
   MdnsActiveResolveEntryDestroy((ActiveResolveEntry*)resolve);
 }
 
-static void MdnsRemoveActiveResolve(Mdns* mdns, ActiveResolveEntry* resolve) {
-  if ((mdns == NULL) || (resolve == NULL)) {
-    return;
-  }
-
-  VectorRemove(mdns->active_resolves, resolve);
-  MdnsActiveResolveEntryDestroy(resolve);
-}
-
 static bool MdnsHasMatchingEntry(const Mdns* mdns, const MdnsEntry* candidate) {
   if ((mdns == NULL) || (mdns->found_entries == NULL) || (candidate == NULL)) {
     return false;
@@ -453,32 +451,92 @@ void MdnsProcessActiveResolves(Mdns* self, fd_set* readfds) {
   for (uint32_t i = 0; i < resolves_to_remove_num; ++i) {
     ActiveResolveEntry* const resolve = resolves_to_remove[i];
     if (resolve != NULL) {
-      MDNS_DEBUG_PRINTF("Removing resolve ref: %p\n", resolve->service_ref);
-      MdnsRemoveActiveResolve(self, resolve);
+      VectorRemove(self->active_resolves, resolve);
+      MdnsActiveResolveEntryDestroy(resolve);
     }
   }
 
   EEBUS_FREE(resolves_to_remove);
 }
 
-void MdnsProcessResults(Mdns* self) {
-  int max_fd = -1;
+static bool MdnsHandleSelectResult(int result, bool* retry) {
+  if (retry != NULL) {
+    *retry = false;
+  }
+
+  if (result > 0) {
+    return true;
+  } else if (result == 0) {
+    return false;
+  } else {
+    MDNS_DEBUG_PRINTF("select() returned %d errno %d %s\n", result, errno, strerror(errno));
+    if (errno == EINTR) {
+      if (retry != NULL) {
+        *retry = true;
+      }
+    }
+    return false;
+  }
+}
+
+static void MdnsProcessBrowseResults(Mdns* self) {
+  if (self->dns_service_browser_ref == NULL) {
+    MDNS_DEBUG_PRINTF("No browse ref to process\n");
+    return;
+  }
+
   fd_set readfds;
   bool stop_handling = false;
 
   while (!stop_handling && !self->cancel) {
-    // 1. Set up the fd_set as usual here.
     FD_ZERO(&readfds);
 
-    // 2. browse fd
-    int browse_fd = DNSServiceRefSockFD(self->dns_service_browser_ref);
-    if (browse_fd >= 0) {
-      FD_SET(browse_fd, &readfds);
-      if (browse_fd > max_fd) max_fd = browse_fd;
+    const int browse_fd = DNSServiceRefSockFD(self->dns_service_browser_ref);
+    if (browse_fd < 0) {
+      MDNS_DEBUG_PRINTF("Invalid browse fd\n");
+      return;
     }
 
-    // 3. resolve fds
-    for (size_t i = 0; i < VectorGetSize(self->active_resolves); ++i) {
+    FD_SET(browse_fd, &readfds);
+    const int max_fd = browse_fd + 1;
+
+    // Set up the timeout. Note: passing constant to select() directly leads to crash!
+    struct timeval tv = select_timeout;
+
+    const int result = select(max_fd, &readfds, (fd_set*)NULL, (fd_set*)NULL, &tv);
+    bool retry = false;
+    if (MdnsHandleSelectResult(result, &retry)) {
+      if (FD_ISSET(browse_fd, &readfds)) {
+        DNSServiceErrorType err = DNSServiceProcessResult(self->dns_service_browser_ref);
+        if (err != kDNSServiceErr_NoError) {
+          MDNS_DEBUG_PRINTF("DNSServiceProcessResult returned %d\n", err);
+          stop_handling = true;
+        }
+      }
+    } else if (retry) {
+      continue;
+    } else {
+      stop_handling = true;
+    }
+  }
+}
+
+static void MdnsProcessResolveResults(Mdns* self) {
+  fd_set readfds;
+  bool stop_handling = false;
+
+  while (!stop_handling && !self->cancel) {
+    const size_t resolves_num = VectorGetSize(self->active_resolves);
+    if (resolves_num == 0) {
+      break;
+    }
+
+    FD_ZERO(&readfds);
+
+    int max_fd = -1;
+
+    // Add active resolves fds
+    for (size_t i = 0; i < resolves_num; ++i) {
       ActiveResolveEntry* const resolve = (ActiveResolveEntry*)VectorGetElement(self->active_resolves, i);
       if ((resolve == NULL) || (resolve->service_ref == NULL)) {
         continue;
@@ -490,31 +548,22 @@ void MdnsProcessResults(Mdns* self) {
         if (fd > max_fd) {
           max_fd = fd;
         }
+      } else {
+        MDNS_DEBUG_PRINTF("Invalid resolve fd\n");
       }
     }
 
-    // 4. Set up the timeout. Note: passing constant to select() directly leads to crash!
-    struct timeval tv = select_timeout;
+    // Set up the timeout. Note: passing constant to select() directly leads to crash!
+    struct timeval tv = mdns_resolve_timeout;
 
     const int result = select(max_fd + 1, &readfds, (fd_set*)NULL, (fd_set*)NULL, &tv);
-    if (result > 0) {
-      // browse
-      if (browse_fd >= 0 && FD_ISSET(browse_fd, &readfds)) {
-        DNSServiceErrorType err = DNSServiceProcessResult(self->dns_service_browser_ref);
-        if (err) {
-          MDNS_DEBUG_PRINTF("DNSServiceProcessResult returned %d\n", err);
-          stop_handling = true;
-        }
-      }
-
+    bool retry = false;
+    if (MdnsHandleSelectResult(result, &retry)) {
       MdnsProcessActiveResolves(self, &readfds);
-    } else if (result == 0) {
-      stop_handling = true;
+    } else if (retry) {
+      continue;
     } else {
-      MDNS_DEBUG_PRINTF("select() returned %d errno %d %s\n", result, errno, strerror(errno));
-      if (errno != EINTR) {
-        stop_handling = true;
-      }
+      stop_handling = true;
     }
   }
 }
@@ -749,8 +798,9 @@ void* MdnsBrowserLoop(void* parameters) {
 
   while (!mdns->cancel) {
     MdnsBrowseServices(mdns);
-    MdnsProcessResults(mdns);
-    MDNS_DEBUG_PRINTF("Number of found entries: %d\n", VectorGetSize(mdns->found_entries));
+    MdnsProcessBrowseResults(mdns);
+    MdnsProcessResolveResults(mdns);
+    MDNS_DEBUG_PRINTF("Number of found entries: %zu\n", VectorGetSize(mdns->found_entries));
     mdns->on_entries_found_cb(mdns->found_entries, mdns->context);
 
     MdnsSleepRandomInterval(mdns);
