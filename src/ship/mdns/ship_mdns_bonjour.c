@@ -433,7 +433,6 @@ void MdnsProcessActiveResolves(Mdns* self, fd_set* readfds) {
 
     int fd = DNSServiceRefSockFD(resolve->service_ref);
     if ((fd >= 0) && FD_ISSET(fd, readfds)) {
-      MDNS_DEBUG_PRINTF("Processing resolve ref: %p\n", resolve->service_ref);
       DNSServiceErrorType err = DNSServiceProcessResult(resolve->service_ref);
       if (err != kDNSServiceErr_NoError) {
         MDNS_DEBUG_PRINTF("DNSServiceProcessResult resolve error %d\n", err);
@@ -592,7 +591,7 @@ void MdnsResolveServiceCallback(
   UNUSED(service_ref);
   UNUSED(iface);
 
-  MDNS_DEBUG_PRINTF("%s(), %s, ", __func__, name);
+  MDNS_DEBUG_PRINTF("%s(), %s, \n", __func__, name);
 
   ActiveResolveEntry* const resolve = (ActiveResolveEntry*)ctx;
   if ((resolve == NULL) || (resolve->owner == NULL)) {
@@ -612,13 +611,7 @@ void MdnsResolveServiceCallback(
 
   const uint16_t port = OpaquePortToUint16(opaque_port);
 
-  MDNS_DEBUG_PRINTF(" can be reached at %s:%u (interface %u)\n", host, port, iface);
-  MDNS_DEBUG_PRINTF(", flags: %X\n", flags);
-
-  // Don't show degenerate TXT records containing nothing but a single empty string
-  if ((txt_record != NULL) && (txt_record_size > 1)) {
-    MDNS_DEBUG_PRINTF(", txt_record: %s\n", txt_record);
-  }
+  MDNS_DEBUG_PRINTF(" can be reached at %s:%u (interface %u), flags: %X\n", host, port, iface, flags);
 
   Mdns* const mdns = resolve->owner;
 
@@ -742,7 +735,6 @@ void MdnsBrowseServicesCallback(
 
   resolve->service_ref = service_resolve_ref;
   VectorPushBack(mdns->active_resolves, resolve);
-  MDNS_DEBUG_PRINTF("Added resolve ref: %p\n", resolve->service_ref);
 }
 
 void MdnsBrowseServices(Mdns* self) {
