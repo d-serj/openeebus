@@ -632,8 +632,8 @@ void MdnsResolveServiceCallback(
   MdnsEntryParseTxtRecord(entry, (const char*)txt_record, txt_record_size);
   resolve->done = true;
 
-  const bool is_own_entry = (strcmp(entry->ski, mdns->ski) == 0);
   const bool is_valid     = MdnsEntryIsValid(entry);
+  const bool is_own_entry = is_valid && (strcmp(entry->ski, mdns->ski) == 0);
 
   if (is_valid && !is_own_entry) {
     if (MdnsHasMatchingEntry(mdns, entry)) {
@@ -662,6 +662,7 @@ void MdnsBrowseServicesCallback(
     void* ctx
 ) {
   UNUSED(service_ref);
+  UNUSED(type);
 
   if (err != kDNSServiceErr_NoError) {
     MDNS_DEBUG_PRINTF("Bonjour browser error occurred: %d\n", err);
