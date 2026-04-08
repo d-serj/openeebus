@@ -4,6 +4,30 @@ cmake_minimum_required (VERSION 3.15)
 
 set(PROJECT_NAME "eebus")
 
+if(COMMAND idf_component_register)
+    set(FREERTOS ON)
+
+    include(${CMAKE_CURRENT_LIST_DIR}/sources.cmake)
+
+    idf_component_register(
+        SRCS
+            ${SOURCES}
+        INCLUDE_DIRS
+            "."
+        REQUIRES
+            freertos
+            json
+            mbedtls
+            mdns
+            esp_netif
+            libwebsockets
+    )
+
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC __freertos__ FREERTOS)
+
+    return()
+endif()
+
 # Set consistent runtime library for all targets on Windows BEFORE project()
 if(WIN32)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
@@ -137,7 +161,7 @@ message(STATUS "TARGET_COMPILE_OPTIONS    " ${TARGET_COMPILE_OPTIONS})
 message(STATUS "TARGET_DEFINITION_OPTIONS " ${TARGET_DEFINITION_OPTIONS})
 message(STATUS "TARGET_LINK_OPTIONS       " ${TARGET_LINK_OPTIONS})
 
-include(sources.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/sources.cmake)
 
 target_sources(
   ${PROJECT_NAME}

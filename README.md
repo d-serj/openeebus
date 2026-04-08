@@ -58,6 +58,7 @@ The current implementation of the OpenEEBUS by NIBE library supports a subset of
 * [Building on Linux](docs/build_linux.md)
 * [Building on macOS](docs/build_macos.md)
 * [Building on Windows](docs/build_windows.md)
+* [Building with ESP-IDF](docs/build_esp_idf.md)
 
 ## Support
 

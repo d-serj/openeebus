@@ -1,0 +1,6 @@
+version: "0.1.0"
+description: OpenEEBUS by NIBE as an ESP-IDF component
+url: https://github.com/NIBEGroup/openeebus
+license: Apache-2.0
+dependencies:
+  idf: ">=5.0"
