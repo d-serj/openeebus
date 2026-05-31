@@ -22,7 +22,7 @@
 #define SRC_COMMON_EEBUS_MALLOC_H_
 
 #if defined(__freertos__)
-#include <FreeRTOS.h>
+#include <freertos/FreeRTOS.h>
 
 #define EEBUS_MALLOC(size) pvPortMalloc((size))
 #define EEBUS_FREE(size) vPortFree((size))
