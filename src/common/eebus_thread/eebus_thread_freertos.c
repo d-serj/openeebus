@@ -15,9 +15,7 @@
  */
 /**
  * @file
- * @brief FreeRTOS Eebus Thread implementation. Internal FreeRTOS task is created as "static"
- * just to be able to use the custom buffer allocation. Note that EEBUS_MALLOC() can
- * use the external RAM on some specific platforms what provides more flexible memory usage.
+ * @brief FreeRTOS Eebus Thread implementation
  */
 
 #include <freertos/FreeRTOS.h>
@@ -39,8 +37,6 @@ struct EebusThread {
   EebusThreadRoutine routine;
   void* parameters;
   SemaphoreHandle_t mutex;
-  StaticTask_t* static_task;
-  StackType_t* task_stack;
   TaskHandle_t task;
   TaskHandle_t join_task;
 };
@@ -83,13 +79,11 @@ EebusError EebusThreadConstruct(EebusThread* self, EebusThreadRoutine routine, v
   // Override "virtual functions table"
   EEBUS_THREAD_INTERFACE(self) = &eebus_thread_methods;
 
-  self->routine     = routine;
-  self->parameters  = parameters;
-  self->mutex       = NULL;
-  self->static_task = NULL;
-  self->task_stack  = NULL;
-  self->task        = NULL;
-  self->join_task   = NULL;
+  self->routine    = routine;
+  self->parameters = parameters;
+  self->mutex      = NULL;
+  self->task       = NULL;
+  self->join_task  = NULL;
 
   if (routine == NULL) {
     return kEebusErrorInputArgumentNull;
@@ -101,34 +95,9 @@ EebusError EebusThreadConstruct(EebusThread* self, EebusThreadRoutine routine, v
     return kEebusErrorThread;
   }
 
-  // Create task buffer
-  // Note: stack can be allocated in the external RAM
   const size_t stack_size_words = (stack_size + sizeof(StackType_t) - 1) / sizeof(StackType_t);
 
-  // Note: shall be always in internal RAM
-  self->static_task = (StaticTask_t*)pvPortMalloc(sizeof(StaticTask_t));
-  if (self->static_task == NULL) {
-    EEBUS_FREE(self->task_stack);
-    return kEebusErrorMemoryAllocate;
-  }
-
-  // Create stack buffer
-  self->task_stack = (StackType_t*)EEBUS_MALLOC(stack_size_words * sizeof(StackType_t));
-  if (self->task_stack == NULL) {
-    return kEebusErrorMemoryAllocate;
-  }
-
-  self->task = xTaskCreateStatic(
-      EebusThreadTask,
-      "EebusThread",
-      stack_size_words,
-      self,
-      tskIDLE_PRIORITY,
-      self->task_stack,
-      self->static_task
-  );
-
-  if (self->task == NULL) {
+  if (xTaskCreate(EebusThreadTask, "EebusThread", stack_size_words, self, tskIDLE_PRIORITY, &self->task) != pdPASS) {
     return kEebusErrorThread;
   }
 
@@ -161,16 +130,6 @@ void Destruct(EebusThreadObject* self) {
   if (eebus_thread->mutex != NULL) {
     vSemaphoreDelete(eebus_thread->mutex);
     eebus_thread->mutex = NULL;
-  }
-
-  if (eebus_thread->task_stack != NULL) {
-    EEBUS_FREE(eebus_thread->task_stack);
-    eebus_thread->task_stack = NULL;
-  }
-
-  if (eebus_thread->static_task != NULL) {
-    vPortFree(eebus_thread->static_task);
-    eebus_thread->static_task = NULL;
   }
 }
 
