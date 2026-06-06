@@ -87,6 +87,7 @@ static void Stop(ShipMdnsObject* self);
 static EebusError RegisterService(ShipMdnsObject* self);
 static void DeregisterService(ShipMdnsObject* self);
 static void SetAutoaccept(ShipMdnsObject* self, bool autoaccept);
+static void MdnsNotifyFoundEntries(Mdns* mdns);
 
 static const ShipMdnsInterface mdns_methods = {
     .destruct           = Destruct,
@@ -217,6 +218,20 @@ void MdnsQueryNotifyCallback(mdns_search_once_t* search) {
   xSemaphoreGive(mdns->semaphore);
 }
 
+static void MdnsNotifyFoundEntries(Mdns* mdns) {
+  const size_t found_count = VectorGetSize(mdns->found_entries);
+  Vector* const copy       = VectorCreateWithDeallocator(MdnsEntryDeallocator);
+
+  for (size_t i = 0; i < found_count; ++i) {
+    MdnsEntry* const entry = (MdnsEntry*)VectorGetElement(mdns->found_entries, i);
+    if (entry != NULL) {
+      VectorPushBack(copy, MdnsEntryCopy(entry));
+    }
+  }
+
+  mdns->on_entries_found_cb(copy, mdns->context);
+}
+
 void MdnsProcessSearchResult(Mdns* mdns, mdns_search_once_t* search) {
   mdns_result_t* results = NULL;
 
@@ -251,8 +266,7 @@ void MdnsProcessSearchResult(Mdns* mdns, mdns_search_once_t* search) {
   }
 
   mdns_query_results_free(results);
-
-  mdns->on_entries_found_cb(mdns->found_entries, mdns->context);
+  MdnsNotifyFoundEntries(mdns);
 }
 
 uint32_t GetUpdateIntervalMs(void) {
