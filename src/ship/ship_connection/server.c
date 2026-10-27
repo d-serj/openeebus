@@ -181,7 +181,7 @@ void CmiStateServerEvaluate(ShipConnection* self) {
 }
 
 void SmeProtHandshakeStateServerInit(ShipConnection* self) {
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
   // The Wait-For-Ready timer is set to default timeout value in the next state
   ShipConnectionSetSmeState(self, kSmeProtHStateServerListenProposal);
 }
@@ -204,7 +204,10 @@ EebusError SmeProtHandshakeStateSendAgreementMessage(ShipConnection* self, uint8
 }
 
 bool SmeProtHandshakeStateAgreeOnProtocolVersion(
-    const MessageProtocolHandshake* sme_prot_hs, uint8_t* agreed_major, uint8_t* agreed_minor) {
+    const MessageProtocolHandshake* sme_prot_hs,
+    uint8_t* agreed_major,
+    uint8_t* agreed_minor
+) {
   if ((sme_prot_hs->version.major <= SHIP_PROTOCOL_MAX_SUPPORTED_MAJOR_VERSION)
       && (sme_prot_hs->version.minor <= SHIP_PROTOCOL_MAX_SUPPORTED_MINOR_VERSION)) {
     *agreed_major = sme_prot_hs->version.major;
@@ -228,7 +231,7 @@ void SmeProtHandshakeStateServerListenProposal(ShipConnection* self) {
       = (MessageProtocolHandshake*)SHIP_MESSAGE_DESERIALIZE_GET_VALUE(deserialize);
 
   if ((msg_value_type == kSmeProtocolHandshake) && (msg_value != NULL)) {
-    EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+    ShipConnectionTimerStop(self, self->wait_for_ready_timer);
 
     if (msg_value->handshake_type != kProtocolHandshakeTypeAnnounceMax) {
       ShipMessageDeserializeDelete(deserialize);
@@ -285,7 +288,7 @@ void SmeProtHandshakeStateServerListenConfirm(ShipConnection* self) {
       return;
     }
 
-    EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+    ShipConnectionTimerStop(self, self->wait_for_ready_timer);
     ShipConnectionSetSmeState(self, kSmeProtHStateServerOk);
   } else {
     SmeProtHandshakeStateAbort(self, kMessageProtocolHandshakeErrorTypeSelectionMismatch);

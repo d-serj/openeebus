@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "src/common/api/eebus_mutex_interface.h"
 #include "src/common/api/eebus_queue_interface.h"
 #include "src/common/api/eebus_timer_interface.h"
 #include "src/common/eebus_errors.h"
@@ -51,6 +52,7 @@ enum ShipConnectionQueueMsgType {
   kShipConnectionQueueMsgTypeWebsocketError,
   kShipConnectionQueueMsgTypeWebsocketClose,
   kShipConnectionQueueMsgTypeCancel,
+  kShipConnectionQueueMsgTypeWake,
 };
 
 typedef enum ShipConnectionQueueMsgType ShipConnectionQueueMsgType;
@@ -62,7 +64,15 @@ struct ShipConnectionQueueMessage {
   MessageBuffer msg_buf;
 };
 
+typedef struct ShipConnection ShipConnection;
 typedef struct {
+  ShipConnection* connection;
+  uint64_t generation;
+  bool pending;
+  bool armed;
+} ShipTimerArm;
+
+struct ShipConnection {
   /** Implements the Ship Connecion Interface */
   ShipConnectionObject sc_object;
 
@@ -87,11 +97,13 @@ typedef struct {
   bool shutdown_once;
 
   bool cancel;
+  EebusMutexObject* control_mutex;
+  ShipTimerArm timer_arms[3];
 
   EebusQueueObject* msg_queue;
   EebusThreadObject* thread;
   MessageBuffer msg;
-} ShipConnection;
+};
 
 #define SHIP_CONNECTION(obj) ((ShipConnection*)(obj))
 
@@ -103,6 +115,10 @@ void ShipConnectionConstruct(
     const char* remote_ski,
     const char* remote_ship_id
 );
+
+bool ShipConnectionCancelled(ShipConnection* self);
+void ShipConnectionTimerStart(ShipConnection* self, EebusTimerObject* timer, uint32_t timeout, bool repeat);
+void ShipConnectionTimerStop(ShipConnection* self, EebusTimerObject* timer);
 
 void ShipConnectionSetSmeState(ShipConnection* self, SmeState state);
 

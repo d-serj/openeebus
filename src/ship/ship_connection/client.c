@@ -183,7 +183,7 @@ void CmiStateClientEvaluate(ShipConnection* self) {
 }
 
 void SmeProtHandshakeStateClientInit(ShipConnection* self) {
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
 
   const MessageProtocolHandshake sme_prot_hs = {
       .handshake_type = kProtocolHandshakeTypeAnnounceMax,
@@ -265,7 +265,7 @@ void SmeProtHandshakeStateClientListenChoice(ShipConnection* self) {
   const MsgValueType msg_value_type = SHIP_MESSAGE_DESERIALIZE_GET_VALUE_TYPE(deserialize);
 
   if ((msg_value_type == kSmeProtocolHandshake) && (sme_prot_hs != NULL)) {
-    EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+    ShipConnectionTimerStop(self, self->wait_for_ready_timer);
 
     if (!SmeProtHandshakeStateMessageCheck(sme_prot_hs)) {
       ShipMessageDeserializeDelete(deserialize);

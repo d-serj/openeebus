@@ -24,7 +24,9 @@
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_errors.h"
 #include "src/common/eebus_malloc.h"
+#include "src/common/eebus_mutex/eebus_mutex.h"
 #include "src/common/eebus_queue/eebus_queue.h"
+#include "src/common/eebus_queue/eebus_queue_internal.h"
 #include "src/common/eebus_thread/eebus_thread.h"
 #include "src/common/eebus_timer/eebus_timer.h"
 #include "src/common/message_buffer.h"
@@ -86,6 +88,7 @@ void ShipConnectionConstruct(
     const char* remote_ski,
     const char* remote_ship_id
 ) {
+  *self = (ShipConnection){0};
   // Override "virtual functions table"
   SHIP_CONNECTION_INTERFACE(self) = &ship_connection_methods;
 
@@ -101,9 +104,11 @@ void ShipConnectionConstruct(
 
   self->is_access_methods_req_sent = false;
 
-  self->wait_for_ready_timer             = EebusTimerCreate(ShipConnectionTimeoutCallback, self);
-  self->send_prolongation_request_timer  = EebusTimerCreate(ShipConnectionTimeoutCallback, self);
-  self->prolongation_request_reply_timer = EebusTimerCreate(ShipConnectionTimeoutCallback, self);
+  self->control_mutex = EebusMutexCreate();
+  for (size_t i = 0; i < 3; ++i) self->timer_arms[i] = (ShipTimerArm){.connection = self};
+  self->wait_for_ready_timer             = EebusTimerCreate(ShipConnectionTimeoutCallback, &self->timer_arms[0]);
+  self->send_prolongation_request_timer  = EebusTimerCreate(ShipConnectionTimeoutCallback, &self->timer_arms[1]);
+  self->prolongation_request_reply_timer = EebusTimerCreate(ShipConnectionTimeoutCallback, &self->timer_arms[2]);
 
   self->last_received_waiting_value = 0;
   self->shutdown_once               = false;
@@ -123,7 +128,14 @@ ShipConnectionObject* ShipConnectionCreate(
 ) {
   ShipConnection* sc = (ShipConnection*)EEBUS_MALLOC(sizeof(ShipConnection));
 
+  if (sc == NULL) return NULL;
   ShipConnectionConstruct(sc, info_provider, role, local_ship_id, remote_ski, remote_ship_id);
+  if (sc->remote_ski == NULL || sc->remote_ship_id == NULL || sc->control_mutex == NULL
+      || sc->wait_for_ready_timer == NULL || sc->send_prolongation_request_timer == NULL
+      || sc->prolongation_request_reply_timer == NULL) {
+    ShipConnectionDelete(SHIP_CONNECTION_OBJECT(sc));
+    return NULL;
+  }
 
   return SHIP_CONNECTION_OBJECT(sc);
 }
@@ -144,7 +156,12 @@ void ShipConnectionQueueMsgDeallocator(void* msg) {
 void Destruct(DataWriterObject* self) {
   ShipConnection* const sc = SHIP_CONNECTION(self);
 
-  sc->cancel = true;
+  if (sc->control_mutex != NULL) {
+    EEBUS_MUTEX_LOCK(sc->control_mutex);
+    sc->cancel = true;
+    EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+  }
+  EebusQueueClose(sc->msg_queue);
 
 #ifndef GTEST
   if (sc->thread != NULL) {
@@ -168,6 +185,9 @@ void Destruct(DataWriterObject* self) {
   EebusTimerDelete(sc->prolongation_request_reply_timer);
   sc->prolongation_request_reply_timer = NULL;
 
+  EebusMutexDelete(sc->control_mutex);
+  sc->control_mutex = NULL;
+
   EebusQueueDelete(sc->msg_queue);
   sc->msg_queue = NULL;
 
@@ -183,7 +203,7 @@ void Destruct(DataWriterObject* self) {
 void* ShipConnectionLoop(void* parameters) {
   ShipConnection* const sc = (ShipConnection*)parameters;
 
-  while ((!sc->cancel) && (!sc->shutdown_once)) {
+  while (!ShipConnectionCancelled(sc) && !sc->shutdown_once) {
     HandleState(sc);
   }
 
@@ -231,10 +251,14 @@ EebusError Start(ShipConnectionObject* self, WebsocketCreatorObject* websocket_c
 void Stop(ShipConnectionObject* self) {
   ShipConnection* const sc = SHIP_CONNECTION(self);
 
-  sc->cancel = true;
+  if (sc->control_mutex != NULL) {
+    EEBUS_MUTEX_LOCK(sc->control_mutex);
+    sc->cancel = true;
+    EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+  }
+  EebusQueueClose(sc->msg_queue);
 
-  ShipConnectionQueueMessage queue_msg = {.type = kShipConnectionQueueMsgTypeCancel};
-  EEBUS_QUEUE_SEND(sc->msg_queue, &queue_msg, kTimeoutInfinite);
+  /* Closing wakes consumers and producers even when the worker already exited. */
 
   if (sc->thread != NULL) {
     EEBUS_THREAD_JOIN(sc->thread);
@@ -242,7 +266,7 @@ void Stop(ShipConnectionObject* self) {
     sc->thread = NULL;
   }
 
-  SHIP_CONNECTION_CLOSE_CONNECTION(self, false, 0, "");
+  if (sc->websocket != NULL) SHIP_CONNECTION_CLOSE_CONNECTION(self, false, 0, "");
 }
 
 const char* GetRemoteSki(ShipConnectionObject* self) {
@@ -303,9 +327,9 @@ void CloseConnection(ShipConnectionObject* self, bool safe, int32_t code, const 
     return;
   };
 
-  EEBUS_TIMER_STOP(sc->wait_for_ready_timer);
-  EEBUS_TIMER_STOP(sc->prolongation_request_reply_timer);
-  EEBUS_TIMER_STOP(sc->send_prolongation_request_timer);
+  ShipConnectionTimerStop(sc, sc->wait_for_ready_timer);
+  ShipConnectionTimerStop(sc, sc->prolongation_request_reply_timer);
+  ShipConnectionTimerStop(sc, sc->send_prolongation_request_timer);
 
   // handshake is completed if approved or aborted
   const SmeState state   = sc->sme_state;
@@ -330,7 +354,9 @@ void CloseConnection(ShipConnectionObject* self, bool safe, int32_t code, const 
     WEBSOCKET_CLOSE(sc->websocket, (code != 0) ? code : 4001, reason);
   }
 
-  sc->cancel        = true;
+  EEBUS_MUTEX_LOCK(sc->control_mutex);
+  sc->cancel = true;
+  EEBUS_MUTEX_UNLOCK(sc->control_mutex);
   sc->shutdown_once = true;
   INFO_PROVIDER_HANDLE_CONNECTION_CLOSED(sc->info_provider, self, is_hs_ended);
 }
@@ -344,7 +370,10 @@ void WriteMessage(DataWriterObject* self, const uint8_t* msg, size_t msg_size) {
   uint8_t* const msg_copy = (uint8_t*)ArrayCopy(msg, msg_size, sizeof(msg[0]));
   MessageBufferInit(&queue_msg.msg_buf, msg_copy, msg_size);
 
-  EEBUS_QUEUE_SEND(sc->msg_queue, &queue_msg, kTimeoutInfinite);
+  if (msg_copy == NULL || EEBUS_QUEUE_SEND(sc->msg_queue, &queue_msg, 0) != kEebusErrorOk) {
+    MessageBufferRelease(&queue_msg.msg_buf);
+    EebusQueueClose(sc->msg_queue);
+  }
 }
 
 void ReportConnectionError(ShipConnection* self, EebusError err) {
@@ -379,36 +408,81 @@ void ReportConnectionError(ShipConnection* self, EebusError err) {
   INFO_PROVIDER_HANDLE_SHIP_STATE_UPDATE(self->info_provider, self->remote_ski, kSmeStateError, "");
 }
 
+bool ShipConnectionCancelled(ShipConnection* sc) {
+  EEBUS_MUTEX_LOCK(sc->control_mutex);
+  bool cancel = sc->cancel;
+  EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+  return cancel;
+}
+
 void ShipConnectionWebsocketCallback(WebsocketCallbackType type, const void* in, size_t size, void* ctx) {
-  ShipConnection* const sc = SHIP_CONNECTION(ctx);
-  if ((sc->cancel) || (sc->shutdown_once)) {
-    return;
-  }
-
+  ShipConnection* sc = ctx;
+  if (ShipConnectionCancelled(sc)) return;
   if (type == kWebsocketCallbackTypeRead) {
-    ShipConnectionQueueMessage queue_msg;
-    queue_msg.type = kShipConnectionQueueMsgTypeDataReceived;
-
-    uint8_t* const msg_copy = (uint8_t*)ArrayCopy(in, size, sizeof(uint8_t));
-    MessageBufferInit(&queue_msg.msg_buf, msg_copy, size);
-    EEBUS_QUEUE_SEND(sc->msg_queue, &queue_msg, kTimeoutInfinite);
-  } else if (type == kWebsocketCallbackTypeError) {
-    static const ShipConnectionQueueMessage err_msg = {.type = kShipConnectionQueueMsgTypeWebsocketError};
-    EEBUS_QUEUE_SEND(sc->msg_queue, &err_msg, kTimeoutInfinite);
-    // TODO: Call the ReportConnectionError(sc, -1) in other than DataExchange states
-  } else if (type == kWebsocketCallbackTypeClose) {
-    static const ShipConnectionQueueMessage close_msg = {.type = kShipConnectionQueueMsgTypeWebsocketClose};
-    EEBUS_QUEUE_SEND(sc->msg_queue, &close_msg, kTimeoutInfinite);
+    ShipConnectionQueueMessage msg = {.type = kShipConnectionQueueMsgTypeDataReceived};
+    uint8_t* copy                  = ArrayCopy(in, size, sizeof(uint8_t));
+    MessageBufferInit(&msg.msg_buf, copy, size);
+    if (copy != NULL && EEBUS_QUEUE_SEND(sc->msg_queue, &msg, 0) == kEebusErrorOk) return;
+    MessageBufferRelease(&msg.msg_buf);
   }
+  /* Error, close, or overflow is terminal, and must survive a full data queue. */
+  EebusQueueClose(sc->msg_queue);
+}
+
+static ShipTimerArm* TimerArm(ShipConnection* sc, EebusTimerObject* timer) {
+  if (timer == sc->wait_for_ready_timer) return &sc->timer_arms[0];
+  if (timer == sc->send_prolongation_request_timer) return &sc->timer_arms[1];
+  return &sc->timer_arms[2];
+}
+
+void ShipConnectionTimerStop(ShipConnection* sc, EebusTimerObject* timer) {
+  if (timer == NULL) return;
+  /* Drain the old callback before invalidating/reusing its context. */
+  EEBUS_TIMER_STOP(timer);
+  EEBUS_MUTEX_LOCK(sc->control_mutex);
+  ShipTimerArm* arm = TimerArm(sc, timer);
+  ++arm->generation;
+  arm->pending = false;
+  arm->armed   = false;
+  EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+}
+
+void ShipConnectionTimerStart(ShipConnection* sc, EebusTimerObject* timer, uint32_t timeout, bool repeat) {
+  ShipTimerArm* arm = TimerArm(sc, timer);
+  if (arm->armed) ShipConnectionTimerStop(sc, timer);
+  EEBUS_MUTEX_LOCK(sc->control_mutex);
+  arm->armed = true;
+  ++arm->generation;
+  EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+  EEBUS_TIMER_START(timer, timeout, repeat);
 }
 
 void ShipConnectionTimeoutCallback(void* ctx) {
-  ShipConnection* const sc             = (ShipConnection*)ctx;
-  ShipConnectionQueueMessage queue_msg = {
-      kShipConnectionQueueMsgTypeTimeout,
-      {NULL, 0, NULL}
-  };
-  EEBUS_QUEUE_SEND(sc->msg_queue, &queue_msg, kTimeoutInfinite);
+  ShipTimerArm* arm  = ctx;
+  ShipConnection* sc = arm->connection;
+  EEBUS_MUTEX_LOCK(sc->control_mutex);
+  if (!sc->cancel) arm->pending = true;
+  EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+  const ShipConnectionQueueMessage wake = {.type = kShipConnectionQueueMsgTypeWake};
+  EEBUS_QUEUE_SEND(sc->msg_queue, &wake, 0);
+}
+
+static EebusError Dequeue(ShipConnection* sc, ShipConnectionQueueMessage* msg) {
+  for (;;) {
+    bool timeout = false;
+    EEBUS_MUTEX_LOCK(sc->control_mutex);
+    for (size_t i = 0; i < 3; ++i) {
+      timeout |= sc->timer_arms[i].pending;
+      sc->timer_arms[i].pending = false;
+    }
+    EEBUS_MUTEX_UNLOCK(sc->control_mutex);
+    if (timeout) {
+      *msg = (ShipConnectionQueueMessage){.type = kShipConnectionQueueMsgTypeTimeout};
+      return kEebusErrorOk;
+    }
+    EebusError err = EEBUS_QUEUE_RECEIVE(sc->msg_queue, msg, kTimeoutInfinite);
+    if (err != kEebusErrorOk || msg->type != kShipConnectionQueueMsgTypeWake) return err;
+  }
 }
 
 void ShipConnectionSetSmeState(ShipConnection* self, SmeState state) {
@@ -454,12 +528,12 @@ EebusError ShipConnectionSend(ShipConnection* self, const MessageBuffer* buf) {
 }
 
 EebusError ShipConnectionReceive(ShipConnection* self, MessageBuffer* buf, uint32_t timeout) {
-  EEBUS_TIMER_START(self->wait_for_ready_timer, timeout, false);
+  ShipConnectionTimerStart(self, self->wait_for_ready_timer, timeout, false);
 
   ShipConnectionQueueMessage queue_msg;
-  const EebusError queue_recv_ret = EEBUS_QUEUE_RECEIVE(self->msg_queue, &queue_msg, kTimeoutInfinite);
+  const EebusError queue_recv_ret = Dequeue(self, &queue_msg);
 
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
 
   if (queue_recv_ret != kEebusErrorOk) {
     SHIP_CONNECTION_DEBUG_PRINTF("%s(), error receiving the message from queue\n", __func__);
@@ -546,8 +620,8 @@ void SmeHelloStateReadyInit(ShipConnection* self) {
   // After sending the hello update message, the SHIP user waits on the update
   // message in SmeHelloReadyListen state. The wait for ready timer is set
   // there.
-  EEBUS_TIMER_STOP(self->send_prolongation_request_timer);
-  EEBUS_TIMER_STOP(self->prolongation_request_reply_timer);
+  ShipConnectionTimerStop(self, self->send_prolongation_request_timer);
+  ShipConnectionTimerStop(self, self->prolongation_request_reply_timer);
   if (SmeHelloStateSendHelloMsg(self, kConnectionHelloPhaseReady, tHelloInit, false) == kEebusErrorOk) {
     ShipConnectionSetSmeState(self, kSmeHelloStateReadyListen);
   } else {
@@ -573,7 +647,7 @@ void SmeHelloStateCommonProlongationRequestAndUpdateMessageSendProcedure(
 ) {
   if ((msg->prolongation_request != NULL) && (*msg->prolongation_request)) {
     uint32_t remaining_time = EEBUS_TIMER_GET_REMAINING_TIME(self->wait_for_ready_timer) + tHelloInc;
-    EEBUS_TIMER_START(self->wait_for_ready_timer, remaining_time, false);
+    ShipConnectionTimerStart(self, self->wait_for_ready_timer, remaining_time, false);
     SmeHelloStateCommonUpdateHelloMessageSendProcedure(self, msg);
   } else {
     // Message is ignored, no action required (13.4.4.1.3 Sub-state
@@ -649,8 +723,8 @@ void SmeHelloStatePendingInit(ShipConnection* self) {
   // After sending the hello update message, the SHIP user waits on the update
   // message in SmeHelloPendingListen state. The wait for ready timer is set
   // there.
-  EEBUS_TIMER_STOP(self->send_prolongation_request_timer);
-  EEBUS_TIMER_STOP(self->prolongation_request_reply_timer);
+  ShipConnectionTimerStop(self, self->send_prolongation_request_timer);
+  ShipConnectionTimerStop(self, self->prolongation_request_reply_timer);
   if (SmeHelloStateSendHelloMsg(self, kConnectionHelloPhasePending, tHelloInit, false) == kEebusErrorOk) {
     ShipConnectionSetSmeState(self, kSmeHelloStatePendingListen);
   } else {
@@ -663,18 +737,18 @@ void SmeHelloCalculateNewWaitValueAndSetTimer(ShipConnection* self, const Connec
     uint32_t new_wait_duration = *msg->waiting - tHelloProlongWaitingGap;
 
     if (new_wait_duration >= tHelloProlongMin) {
-      EEBUS_TIMER_START(self->send_prolongation_request_timer, new_wait_duration, false);
+      ShipConnectionTimerStart(self, self->send_prolongation_request_timer, new_wait_duration, false);
     } else {
-      EEBUS_TIMER_STOP(self->send_prolongation_request_timer);
+      ShipConnectionTimerStop(self, self->send_prolongation_request_timer);
     }
   } else {
-    EEBUS_TIMER_STOP(self->send_prolongation_request_timer);
+    ShipConnectionTimerStop(self, self->send_prolongation_request_timer);
   }
 }
 
 void SmeHelloStateCheckWaitAndProlongationRequestSubelements(ShipConnection* self, const ConnectionHello* msg) {
   if ((msg->waiting != NULL) && (msg->prolongation_request == NULL)) {
-    EEBUS_TIMER_STOP(self->prolongation_request_reply_timer);
+    ShipConnectionTimerStop(self, self->prolongation_request_reply_timer);
     SmeHelloCalculateNewWaitValueAndSetTimer(self, msg);
   } else {
     SmeHelloStateCommonProlongationRequestAndUpdateMessageSendProcedure(self, msg);
@@ -683,8 +757,8 @@ void SmeHelloStateCheckWaitAndProlongationRequestSubelements(ShipConnection* sel
 
 void SmeHelloStateCheckWaitingSubelement(ShipConnection* self, const ConnectionHello* msg) {
   if (msg->waiting != NULL) {
-    EEBUS_TIMER_STOP(self->wait_for_ready_timer);
-    EEBUS_TIMER_STOP(self->prolongation_request_reply_timer);
+    ShipConnectionTimerStop(self, self->wait_for_ready_timer);
+    ShipConnectionTimerStop(self, self->prolongation_request_reply_timer);
     SmeHelloCalculateNewWaitValueAndSetTimer(self, msg);
   } else {
     ShipConnectionSetSmeState(self, kSmeHelloStateAbort);
@@ -773,7 +847,7 @@ void SmeHelloStatePendingTimeout(ShipConnection* self) {
           = (uint32_t)(EEBUS_TIMER_GET_REMAINING_TIME(self->prolongation_request_reply_timer) * 1.1);
     }
 
-    EEBUS_TIMER_START(self->prolongation_request_reply_timer, self->last_received_waiting_value, false);
+    ShipConnectionTimerStart(self, self->prolongation_request_reply_timer, self->last_received_waiting_value, false);
 
     ShipConnectionSetSmeState(self, kSmeHelloStatePendingListen);
   }
@@ -789,7 +863,7 @@ void SmeHelloStateAbort(ShipConnection* self) {
 }
 
 void SmeProtHandshakeStateAbort(ShipConnection* self, MessageProtocolHandshakeErrorType error) {
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
   MessageProtocolHandshakeError sme_prot_hs_err = {.error = error};
 
   const EebusError ret = ShipConnectionSerializeAndSendMessage(self, &sme_prot_hs_err, kSmeProtocolHandshakeError);
@@ -985,7 +1059,7 @@ void SmeHandshakeAccessMethodsInit(ShipConnection* self) {
         "kSmeConnectionAccessMethodsRequest message"
     );
   } else {
-    EEBUS_TIMER_START(self->wait_for_ready_timer, cmiTimeout, false);
+    ShipConnectionTimerStart(self, self->wait_for_ready_timer, cmiTimeout, false);
     // Access Methods is now a kind of Data Exchange substate
     // so no switch state is required
   }
@@ -1032,7 +1106,7 @@ bool SmeHandshakeAccessMethodsCheckMessageVal(ShipConnection* self, ShipMessageD
 }
 
 EebusError SmeHandshakeAccessMethodsHandle(ShipConnection* self, ShipMessageDeserializeObject* deserialize) {
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
 
   if (!SmeHandshakeAccessMethodsCheckMessageVal(self, deserialize)) {
     return kEebusErrorCommunication;
@@ -1047,7 +1121,11 @@ EebusError SmeHandshakeAccessMethodsHandle(ShipConnection* self, ShipMessageDese
 void SmeStateApproved(ShipConnection* self) {
   self->data_reader
       = INFO_PROVIDER_SETUP_REMOTE_DEVICE(self->info_provider, self->remote_ski, DATA_WRITER_OBJECT(self));
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
+  if (self->data_reader == NULL) {
+    ShipConnectionCloseWithError(self, "application setup cancelled or failed");
+    return;
+  }
   ShipConnectionSetSmeState(self, kDataExchange);
 }
 
@@ -1069,9 +1147,9 @@ EebusError DataExchangeHandleClose(ShipConnection* self, const ConnectionClose* 
   // Mirror what CloseConnection does after WEBSOCKET_CLOSE: stop timers, set shutdown_once
   // so that the subsequent CloseConnection call from Stop() is a no-op and does not send a
   // duplicate kShipConnectionClosed message with a dangling sc pointer.
-  EEBUS_TIMER_STOP(self->wait_for_ready_timer);
-  EEBUS_TIMER_STOP(self->send_prolongation_request_timer);
-  EEBUS_TIMER_STOP(self->prolongation_request_reply_timer);
+  ShipConnectionTimerStop(self, self->wait_for_ready_timer);
+  ShipConnectionTimerStop(self, self->send_prolongation_request_timer);
+  ShipConnectionTimerStop(self, self->prolongation_request_reply_timer);
   self->cancel        = true;
   self->shutdown_once = true;
   INFO_PROVIDER_HANDLE_CONNECTION_CLOSED(self->info_provider, SHIP_CONNECTION_OBJECT(self), true);
@@ -1138,7 +1216,7 @@ EebusError DataExchangeHandleSendSpineData(ShipConnection* self, const MessageBu
 
 EebusError DataExchangeHandle(ShipConnection* self) {
   ShipConnectionQueueMessage queue_msg;
-  const EebusError queue_recv_ret = EEBUS_QUEUE_RECEIVE(self->msg_queue, &queue_msg, kTimeoutInfinite);
+  const EebusError queue_recv_ret = Dequeue(self, &queue_msg);
 
   if (queue_recv_ret != kEebusErrorOk) {
     SHIP_CONNECTION_DEBUG_PRINTF("%s(), error receiving the message from queue\n", __func__);

@@ -31,3 +31,21 @@ TEST_F(ShipConnectionTestSuite, ShipConnectionCreationTest) {
   EXPECT_EQ(std::string_view(SHIP_CONNECTION_GET_REMOTE_SKI(&sc)), kShipRemoteSki);
   ExpectConnectionClose("", false);
 }
+
+TEST_F(ShipConnectionTestSuite, CancelledTimeoutWakeDoesNotTimeoutNewReceive) {
+  sc.timer_arms[1].pending = true;
+  const ShipConnectionQueueMessage wake{.type = kShipConnectionQueueMsgTypeWake, .msg_buf = {}};
+  ASSERT_EQ(EEBUS_QUEUE_SEND(sc.msg_queue, &wake, 0), kEebusErrorOk);
+  EXPECT_CALL(*spr_timer_mock->gmock, Stop(sc.send_prolongation_request_timer));
+  ShipConnectionTimerStop(&sc, sc.send_prolongation_request_timer);
+  ShipConnectionQueueMessage data{.type = kShipConnectionQueueMsgTypeDataReceived, .msg_buf = {}};
+  ASSERT_EQ(MessageBufferInitHelper(&data.msg_buf, "{}"sv), kEebusErrorOk);
+  ASSERT_EQ(EEBUS_QUEUE_SEND(sc.msg_queue, &data, 0), kEebusErrorOk);
+  EXPECT_CALL(*wfr_timer_mock->gmock, Start(sc.wait_for_ready_timer, 1000, false));
+  EXPECT_CALL(*wfr_timer_mock->gmock, Stop(sc.wait_for_ready_timer));
+  MessageBuffer received{};
+  EXPECT_EQ(ShipConnectionReceive(&sc, &received, 1000), kEebusErrorOk);
+  EXPECT_NE(received.data, nullptr);
+  MessageBufferRelease(&received);
+  ExpectConnectionClose("", false);
+}
