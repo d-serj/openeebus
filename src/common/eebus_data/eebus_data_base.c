@@ -19,6 +19,8 @@
  * @brief EEBUS Data Simple group basic methods implementation
  */
 
+#include "src/common/eebus_data/eebus_data_base.h"
+
 #include <stdbool.h>
 #include <string.h>
 
@@ -171,8 +173,14 @@ EebusError EebusDataBaseWriteElements(const EebusDataCfg* cfg, void* base_addr, 
   return EEBUS_DATA_WRITE(cfg, base_addr, src_base_addr);
 }
 
-EebusError EebusDataBaseWritePartial(const EebusDataCfg* cfg, void* base_addr, void* src_base_addr,
-    const EebusDataCfg* selectors_cfg, const void* selectors_base_addr, SelectorsMatcher selectors_matcher) {
+EebusError EebusDataBaseWritePartial(
+    const EebusDataCfg* cfg,
+    void* base_addr,
+    const void* src_base_addr,
+    const EebusDataCfg* selectors_cfg,
+    const void* selectors_base_addr,
+    SelectorsMatcher selectors_matcher
+) {
   UNUSED(selectors_cfg);
   UNUSED(selectors_base_addr);
   UNUSED(selectors_matcher);
