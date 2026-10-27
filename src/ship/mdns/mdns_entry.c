@@ -165,6 +165,36 @@ MdnsEntry* MdnsEntryCopy(const MdnsEntry* src) {
   new_entry->type    = StringCopy(src->type);
   new_entry->model   = StringCopy(src->model);
 
+  const char* originals[]
+      = {src->name,
+         src->host,
+         src->domain,
+         src->txtvers,
+         src->id,
+         src->path,
+         src->ski,
+         src->reg,
+         src->brand,
+         src->type,
+         src->model};
+  const char* copies[]
+      = {new_entry->name,
+         new_entry->host,
+         new_entry->domain,
+         new_entry->txtvers,
+         new_entry->id,
+         new_entry->path,
+         new_entry->ski,
+         new_entry->reg,
+         new_entry->brand,
+         new_entry->type,
+         new_entry->model};
+  for (size_t i = 0; i < sizeof(originals) / sizeof(originals[0]); ++i) {
+    if (originals[i] != NULL && copies[i] == NULL) {
+      MdnsEntryDelete(new_entry);
+      return NULL;
+    }
+  }
   return new_entry;
 }
 
@@ -191,7 +221,7 @@ MdnsEntrySetValue(MdnsEntry* entry, const char* key_ptr, size_t key_size, const 
 
   const char** value = NULL;
   for (size_t i = 0; i < ARRAY_SIZE(mdns_entry_lut); ++i) {
-    if (!strncmp(mdns_entry_lut[i].key, key_ptr, key_size)) {
+    if (strlen(mdns_entry_lut[i].key) == key_size && !strncmp(mdns_entry_lut[i].key, key_ptr, key_size)) {
       value = (const char**)((const uint8_t*)entry + mdns_entry_lut[i].offset);
       break;
     }
@@ -201,7 +231,10 @@ MdnsEntrySetValue(MdnsEntry* entry, const char* key_ptr, size_t key_size, const 
     return kEebusErrorParse;
   };
 
-  *value = StringNCopy(value_ptr, value_size);
+  char* copy = StringNCopy(value_ptr, value_size);
+  if (copy == NULL) return kEebusErrorMemoryAllocate;
+  StringDelete((char*)*value);
+  *value = copy;
 
   return kEebusErrorOk;
 }
@@ -234,6 +267,7 @@ EebusError MdnsEntryParseTxtRecord(MdnsEntry* entry, const char* txt_record, uin
     }
 
     const EebusError ret = MdnsEntrySetValue(entry, key_ptr, key_size, value_ptr, value_size);
+    if (ret == kEebusErrorMemoryAllocate) return ret;
     if (ret != kEebusErrorOk) {
       MDNS_ENTRY_DEBUG_PRINTF(
           "%s, Warning! Unsupported key: %.*s; value: %.*s\n",
@@ -253,8 +287,11 @@ EebusError MdnsEntryParseTxtRecord(MdnsEntry* entry, const char* txt_record, uin
 }
 
 EebusError MdnsEntrySetHost(MdnsEntry* entry, const char* host) {
-  entry->host = StringCopy(host);
-  return (entry->host == NULL) ? kEebusErrorMemoryAllocate : kEebusErrorOk;
+  char* copy = StringCopy(host);
+  if (copy == NULL) return kEebusErrorMemoryAllocate;
+  StringDelete((char*)entry->host);
+  entry->host = copy;
+  return kEebusErrorOk;
 }
 
 const char* MdnsEntryToUri(const MdnsEntry* entry) {

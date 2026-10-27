@@ -66,3 +66,10 @@ add_test(
 )
 
 gtest_discover_tests(${TEST_NAME})
+
+if(TARGET openeebus AND NOT OPTION_MDNS_USE_AVAHI_CLIENT AND NOT WIN32 AND NOT APPLE)
+  add_executable(mdns_lifecycle_test mdns_lifecycle_test.c)
+  target_link_libraries(mdns_lifecycle_test PRIVATE openeebus)
+  target_compile_options(mdns_lifecycle_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+  add_test(NAME mdns_lifecycle_test COMMAND mdns_lifecycle_test)
+endif()
