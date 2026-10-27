@@ -18,6 +18,7 @@
  * @brief Device Local implementation
  */
 
+#include <stdatomic.h>
 #include "device.h"
 #include "src/common/debug.h"
 #include "src/common/eebus_arguments.h"
@@ -26,6 +27,7 @@
 #include "src/common/eebus_malloc.h"
 #include "src/common/eebus_mutex/eebus_mutex.h"
 #include "src/common/eebus_queue/eebus_queue.h"
+#include "src/common/eebus_queue/eebus_queue_internal.h"
 #include "src/common/eebus_thread/eebus_thread.h"
 #include "src/common/eebus_timer/eebus_timer.h"
 #include "src/common/message_buffer.h"
@@ -74,7 +76,13 @@ struct DeviceLocalQueueMessage {
   DeviceLocalQueueMsgType type;
   MessageBuffer msg_buf;
   DeviceRemoteObject* remote_device;
+  uint64_t remote_generation;
 };
+
+typedef struct {
+  DeviceRemoteObject* device;
+  uint64_t generation;
+} RemoteSession;
 
 typedef struct DeviceLocal DeviceLocal;
 
@@ -88,8 +96,10 @@ struct DeviceLocal {
   BindingManagerObject* binding_manager;
   NodeManagementObject* node_management;
   StringLut remote_devices;
+  Vector remote_sessions;
+  uint64_t next_remote_generation;
 
-  bool cancel;
+  atomic_bool cancel;
   EebusQueueObject* msg_queue;
   EebusThreadObject* thread;
   EebusTimerObject* timer;
@@ -240,7 +250,9 @@ void DeviceLocalConstruct(
   self->binding_manager      = BindingManagerCreate(DEVICE_LOCAL_OBJECT(self));
   self->node_management      = NULL;
   StringLutInit(&self->remote_devices);
-  self->cancel    = false;
+  VectorConstruct(&self->remote_sessions);
+  self->next_remote_generation = 0;
+  atomic_init(&self->cancel, false);
   self->msg_queue = NULL;
   self->thread    = NULL;
   self->timer     = NULL;
@@ -284,6 +296,8 @@ void Destruct(DeviceObject* self) {
   dl->msg_queue = NULL;
 
   StringLutRelease(&dl->remote_devices);
+  VectorFreeElements(&dl->remote_sessions);
+  VectorDestruct(&dl->remote_sessions);
 
   EebusMutexDelete(dl->mutex);
   dl->mutex = NULL;
@@ -329,14 +343,12 @@ void DeviceLocalTick(DeviceLocalObject* self) {
   }
 }
 
-static bool IsRemoteDeviceAlive(const DeviceLocal* dl, const DeviceRemoteObject* remote_device) {
-  for (size_t i = 0; i < StringLutGetSize(&dl->remote_devices); ++i) {
-    if (StringLutGetElementValue(&dl->remote_devices, i) == (const void*)remote_device) {
-      return true;
-    }
+static uint64_t RemoteGeneration(const DeviceLocal* dl, const DeviceRemoteObject* device) {
+  for (size_t i = 0; i < VectorGetSize(&dl->remote_sessions); ++i) {
+    RemoteSession* session = VectorGetElement(&dl->remote_sessions, i);
+    if (session->device == device) return session->generation;
   }
-
-  return false;
+  return 0;
 }
 
 EebusError HandleQueueMessage(DeviceLocalObject* self) {
@@ -354,7 +366,8 @@ EebusError HandleQueueMessage(DeviceLocalObject* self) {
     DatagramType* const datagram = DatagramParse((const char*)queue_msg.msg_buf.data);
 
     EEBUS_MUTEX_LOCK(dl->mutex);
-    if (IsRemoteDeviceAlive(dl, queue_msg.remote_device)) {
+    if (queue_msg.remote_generation != 0
+        && RemoteGeneration(dl, queue_msg.remote_device) == queue_msg.remote_generation) {
       err = ProcessDatagram(self, datagram, queue_msg.remote_device);
     }
     EEBUS_MUTEX_UNLOCK(dl->mutex);
@@ -395,6 +408,11 @@ void DeviceLocal1sTickCallback(void* ctx) {
 }
 
 EebusError DeviceLocalTryStart(DeviceLocal* self) {
+  if (self->cancel) {
+    EebusQueueDelete(self->msg_queue);
+    self->msg_queue = EebusQueueCreate(30, sizeof(DeviceLocalQueueMessage), DeviceLocalQueueMsgDeallocator);
+    self->cancel    = false;
+  }
   if (self->msg_queue == NULL) {
     DEVICE_LOCAL_DEBUG_PRINTF("%s(), initialising write queue failed\n", __func__);
     return kEebusErrorMemory;
@@ -435,6 +453,7 @@ EebusError Start(DeviceLocalObject* self) {
 
 static void Stop(DeviceLocalObject* self) {
   DeviceLocal* const dl = DEVICE_LOCAL(self);
+  EebusQueueClose(dl->msg_queue);
 
   if (dl->timer != NULL) {
     EEBUS_TIMER_STOP(dl->timer);
@@ -446,7 +465,7 @@ static void Stop(DeviceLocalObject* self) {
     dl->cancel = true;
 
     DeviceLocalQueueMessage queue_msg = {.type = kDeviceLocalQueueMsgTypeCancel};
-    EEBUS_QUEUE_SEND(dl->msg_queue, &queue_msg, kTimeoutInfinite);
+    EEBUS_QUEUE_SEND(dl->msg_queue, &queue_msg, 0);
 
     EEBUS_THREAD_JOIN(dl->thread);
     EebusThreadDelete(dl->thread);
@@ -544,7 +563,12 @@ DataReaderObject* SetupRemoteDevice(DeviceLocalObject* self, const char* ski, Da
   DeviceLocal* const dl = DEVICE_LOCAL(self);
 
   SenderObject* const sender = SenderCreate(writer);
-  DeviceRemoteObject* dr     = DeviceRemoteCreate(DEVICE_LOCAL_OBJECT(dl), ski, sender);
+  if (sender == NULL) return NULL;
+  DeviceRemoteObject* dr = DeviceRemoteCreate(DEVICE_LOCAL_OBJECT(dl), ski, sender);
+  if (dr == NULL) {
+    SenderDelete(sender);
+    return NULL;
+  }
   EEBUS_MUTEX_LOCK(dl->mutex);
 
   // Guard against reconnect before the previous disconnect fires: remove stale entry
@@ -553,6 +577,10 @@ DataReaderObject* SetupRemoteDevice(DeviceLocalObject* self, const char* ski, Da
   }
 
   AddRemoteDeviceForSki(self, ski, dr);
+  if (RemoteGeneration(dl, dr) == 0) {
+    EEBUS_MUTEX_UNLOCK(dl->mutex);
+    return NULL;
+  }
 
   // Request Detailed Discovery Data
   RequestDeviceRemoteDetailedDiscoveryData(self, dr);
@@ -568,8 +596,26 @@ void RemoteDeviceDeleter(void* dr) {
 }
 
 void AddRemoteDeviceForSki(DeviceLocalObject* self, const char* ski, DeviceRemoteObject* remote_device) {
-  DeviceLocal* const dl = DEVICE_LOCAL(self);
+  DeviceLocal* dl        = DEVICE_LOCAL(self);
+  RemoteSession* session = dl->next_remote_generation == UINT64_MAX ? NULL : EEBUS_MALLOC(sizeof(*session));
+  if (session == NULL) {
+    DeviceRemoteDelete(remote_device);
+    return;
+  }
+  *session      = (RemoteSession){remote_device, ++dl->next_remote_generation};
+  size_t before = VectorGetSize(&dl->remote_sessions);
+  VectorPushBack(&dl->remote_sessions, session);
+  if (before == VectorGetSize(&dl->remote_sessions)) {
+    EEBUS_FREE(session);
+    DeviceRemoteDelete(remote_device);
+    return;
+  }
   StringLutInsert(&dl->remote_devices, ski, remote_device, RemoteDeviceDeleter);
+  if (StringLutFind(&dl->remote_devices, ski) != remote_device) {
+    VectorRemove(&dl->remote_sessions, session);
+    EEBUS_FREE(session);
+    DeviceRemoteDelete(remote_device);
+  }
 }
 
 void RemoveRemoteDeviceConnection(DeviceLocalObject* self, const char* ski) {
@@ -630,6 +676,14 @@ void RemoveRemoteDevice(DeviceLocalObject* self, const char* ski) {
     }
   }
 
+  for (size_t i = 0; i < VectorGetSize(&dl->remote_sessions); ++i) {
+    RemoteSession* session = VectorGetElement(&dl->remote_sessions, i);
+    if (session->device == remote_device) {
+      VectorRemove(&dl->remote_sessions, session);
+      EEBUS_FREE(session);
+      break;
+    }
+  }
   StringLutRemove(&dl->remote_devices, ski);
 }
 
@@ -997,10 +1051,19 @@ EebusError HandleMessage(DeviceLocalObject* self, MessageBuffer* msg, DeviceRemo
       .remote_device = remote_device,
   };
 
+  EEBUS_MUTEX_LOCK(dl->mutex);
+  queue_msg.remote_generation = RemoteGeneration(dl, remote_device);
+  EEBUS_MUTEX_UNLOCK(dl->mutex);
+  if (queue_msg.remote_generation == 0) {
+    MessageBufferRelease(msg);
+    return kEebusErrorDeactivate;
+  }
   MessageBufferInit(&queue_msg.msg_buf, NULL, 0);
   MessageBufferMove(msg, &queue_msg.msg_buf);
 
-  return EEBUS_QUEUE_SEND(dl->msg_queue, &queue_msg, kTimeoutInfinite);
+  EebusError result = EEBUS_QUEUE_SEND(dl->msg_queue, &queue_msg, kTimeoutInfinite);
+  if (result != kEebusErrorOk) MessageBufferRelease(&queue_msg.msg_buf);
+  return result;
 }
 
 NodeManagementObject* GetNodeManagement(const DeviceLocalObject* self) {
