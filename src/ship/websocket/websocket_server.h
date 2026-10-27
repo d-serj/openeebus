@@ -35,6 +35,7 @@ extern "C" {
 WebsocketObject* WebsocketServerOpen(HttpServerObject* srv, struct lws* wsi, WebsocketCallback cb, void* ctx);
 
 void HttpServerUnbindWsi(HttpServerObject* self, struct lws* wsi);
+bool HttpServerBindWsi(HttpServerObject* self, struct lws* wsi, WebsocketObject* ws);
 
 #ifdef __cplusplus
 }

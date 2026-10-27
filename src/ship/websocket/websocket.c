@@ -57,8 +57,10 @@ EebusError WebsocketConstruct(Websocket* self, WebsocketCallback cb, void* ctx) 
   self->callback = cb;
   self->context  = ctx;
 
-  self->is_closed   = false;
-  self->close_error = 0;
+  self->is_closed        = false;
+  self->close_requested  = false;
+  self->retirement_reply = NULL;
+  self->close_error      = 0;
 
   self->wr_queue = NULL;
   self->wr_mutex = NULL;
@@ -84,6 +86,8 @@ EebusError WebsocketConstruct(Websocket* self, WebsocketCallback cb, void* ctx) 
     return kEebusErrorInit;
   }
 
+  self->retirement_reply = EebusQueueCreate(1, sizeof(bool), NULL);
+  if (self->retirement_reply == NULL) return kEebusErrorMemoryAllocate;
   return kEebusErrorOk;
 }
 
@@ -107,6 +111,8 @@ void WebsocketDestruct(WebsocketObject* self) {
     ws->lws_ctx = NULL;
   }
 
+  EebusQueueDelete(ws->retirement_reply);
+  ws->retirement_reply = NULL;
   EebusMutexDelete(ws->wr_mutex);
   ws->wr_mutex = NULL;
 
@@ -160,23 +166,48 @@ int32_t WebsocketWrite(WebsocketObject* self, const uint8_t* msg, size_t msg_siz
   return ret;
 }
 
+bool WebsocketCloseRequested(Websocket* ws) {
+  EEBUS_MUTEX_LOCK(ws->wr_mutex);
+  bool requested = ws->close_requested;
+  EEBUS_MUTEX_UNLOCK(ws->wr_mutex);
+  return requested;
+}
+
 void WebsocketClose(WebsocketObject* self, int32_t close_code, const char* reason) {
   UNUSED(reason);
-  Websocket* const ws = WEBSOCKET(self);
-
+  Websocket* ws = WEBSOCKET(self);
   EEBUS_MUTEX_LOCK(ws->wr_mutex);
-  ws->close_error = close_code;
-  ws->wsi         = NULL;
-  ws->is_closed   = true;
+  ws->close_error     = close_code;
+  ws->close_requested = true;
+  if (ws->lws_ctx != NULL) lws_cancel_service(ws->lws_ctx);
   EEBUS_MUTEX_UNLOCK(ws->wr_mutex);
 }
 
+void WebsocketBackendDetached(Websocket* ws) {
+  EEBUS_MUTEX_LOCK(ws->wr_mutex);
+  ws->wsi       = NULL;
+  ws->lws_ctx   = NULL;
+  ws->is_closed = true;
+  EEBUS_MUTEX_UNLOCK(ws->wr_mutex);
+  bool detached = true;
+  /* Last access: the owner may release ws after receiving this acknowledgement. */
+  EEBUS_QUEUE_SEND(ws->retirement_reply, &detached, 0);
+}
+
 bool WebsocketIsClosed(const WebsocketObject* self) {
-  return WEBSOCKET(self)->is_closed;
+  Websocket* ws = WEBSOCKET(self);
+  EEBUS_MUTEX_LOCK(ws->wr_mutex);
+  bool closed = ws->is_closed;
+  EEBUS_MUTEX_UNLOCK(ws->wr_mutex);
+  return closed;
 }
 
 int32_t WebsocketGetCloseError(const WebsocketObject* self) {
-  return WEBSOCKET(self)->close_error;
+  Websocket* ws = WEBSOCKET(self);
+  EEBUS_MUTEX_LOCK(ws->wr_mutex);
+  int32_t error = ws->close_error;
+  EEBUS_MUTEX_UNLOCK(ws->wr_mutex);
+  return error;
 }
 
 void WebsocketScheduleWrite(WebsocketObject* self) {
@@ -204,9 +235,7 @@ void WebsocketStaggerCallback(lws_sorted_usec_list_t* sul) {
 int WebsocketOnWritable(WebsocketObject* self) {
   Websocket* const ws = (Websocket*)WEBSOCKET(self);
 
-  // Snapshot wsi once: WebsocketClose() can set ws->wsi = NULL from another thread.
-  // If wsi is non-NULL here the LWS wsi object is still alive — lws_context_destroy
-  // runs only after the LWS service thread exits.
+  // Called only by the backend that owns the native WSI.
   struct lws* const wsi = ws->wsi;
   if (wsi == NULL) {
     return 0;

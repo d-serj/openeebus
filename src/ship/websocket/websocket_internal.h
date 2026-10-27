@@ -67,6 +67,8 @@ struct Websocket {
   void* context;
 
   bool is_closed;
+  bool close_requested;
+  EebusQueueObject* retirement_reply;
   int32_t close_error;
 
   EebusQueueObject* wr_queue;
@@ -84,6 +86,8 @@ EebusError WebsocketConstruct(Websocket* self, WebsocketCallback cb, void* ctx);
 void WebsocketDestruct(WebsocketObject* self);
 int32_t WebsocketWrite(WebsocketObject* self, const uint8_t* msg, size_t msg_size);
 void WebsocketClose(WebsocketObject* self, int32_t close_code, const char* reason);
+bool WebsocketCloseRequested(Websocket* self);
+void WebsocketBackendDetached(Websocket* self);
 bool WebsocketIsClosed(const WebsocketObject* self);
 int32_t WebsocketGetCloseError(const WebsocketObject* self);
 void WebsocketScheduleWrite(WebsocketObject* self);

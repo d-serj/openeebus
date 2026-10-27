@@ -85,7 +85,12 @@ EebusError WebsocketClientConstruct(
     WebsocketCallback cb,
     void* ctx
 ) {
-  const EebusError ret = WebsocketConstruct(WEBSOCKET(self), cb, ctx);
+  self->thread           = NULL;
+  self->uri              = NULL;
+  self->path             = NULL;
+  self->remote_ski       = NULL;
+  self->lws_connect_info = NULL;
+  const EebusError ret   = WebsocketConstruct(WEBSOCKET(self), cb, ctx);
   // Override "virtual functions table"
   WEBSOCKET_INTERFACE(self) = &websocket_client_methods;
 
@@ -102,6 +107,7 @@ EebusError WebsocketClientConstruct(
   self->port       = 0;
   self->tls_cert   = tls_cert;
   self->remote_ski = StringCopy(remote_ski);
+  if (self->uri == NULL || self->remote_ski == NULL) return kEebusErrorMemoryAllocate;
 
   self->protocols[0]
       = (struct lws_protocols){SHIP_WEBSOCKET_SUB_PROTOCOL, WebsocketClientServiceCallback, 0, 16 * 1024, 0, self, 0};
@@ -119,17 +125,19 @@ void* WebsocketClientLoop(void* parameters) {
   ws->wsi = lws_client_connect_via_info(self->lws_connect_info);
 
   if (ws->wsi == NULL) {
-    static const char* const kWebsocketConnectErr = "websocket connect failed";
-    WEBSOCKET_DEBUG_PRINTF("%s(), %s!\n", __func__, kWebsocketConnectErr);
-    WebsocketUserCallback(ws, kWebsocketCallbackTypeError, (void*)kWebsocketConnectErr, strlen(kWebsocketConnectErr));
-    return NULL;
+    static const char message[] = "websocket connect failed";
+    WebsocketUserCallback(ws, kWebsocketCallbackTypeError, message, sizeof(message) - 1);
+  } else {
+    lws_sul_schedule(ws->lws_ctx, 0, &ws->sul_stagger, WebsocketStaggerCallback, kWebsocketStaggerDelay);
+    while (!WebsocketCloseRequested(ws) && ws->wsi != NULL) lws_service(ws->lws_ctx, 500);
   }
-
-  lws_sul_schedule(ws->lws_ctx, 0, &ws->sul_stagger, WebsocketStaggerCallback, kWebsocketStaggerDelay);
-
-  do {
-    lws_service(ws->lws_ctx, 500);
-  } while (!self->cancel && ws->wsi != NULL);
+  lws_sul_cancel(&ws->sul_stagger);
+  EEBUS_MUTEX_LOCK(ws->wr_mutex);
+  struct lws_context* context = ws->lws_ctx;
+  ws->lws_ctx                 = NULL;
+  EEBUS_MUTEX_UNLOCK(ws->wr_mutex);
+  lws_context_destroy(context);
+  ws->wsi = NULL;
 
   return NULL;
 }
@@ -325,7 +333,7 @@ WebsocketObject* WebsocketClientOpen(
 void Destruct(WebsocketObject* self) {
   WebsocketClient* const ws = WEBSOCKET_CLIENT(self);
 
-  ws->cancel = true;
+  if (WEBSOCKET(ws)->wr_mutex != NULL) WebsocketClose(self, 0, "");
 
   if (ws->thread != NULL) {
     EEBUS_THREAD_JOIN(ws->thread);
@@ -344,15 +352,12 @@ void Destruct(WebsocketObject* self) {
   }
 
   if (ws->lws_connect_info != NULL) {
-    if (ws->lws_connect_info->path != NULL) {
-      StringDelete((char*)ws->lws_connect_info->path);
-      ws->lws_connect_info->path = NULL;
-    }
-
     EEBUS_FREE(ws->lws_connect_info);
     ws->lws_connect_info = NULL;
   }
 
+  StringDelete((char*)ws->path);
+  ws->path = NULL;
   WebsocketDestruct(self);
 }
 
@@ -367,11 +372,7 @@ int WebsocketClientOnClientEstablished(WebsocketClient* self) {
     return -1;
   }
 
-  // Snapshot ws->wsi once. WebsocketClose() can set ws->wsi = NULL from another
-  // thread (SIMOPEN superseded connection cleanup path). Reading it once and using only the
-  // snapshot eliminates the race window between the two uses below: if it is already
-  // NULL we bail out early; if it becomes NULL after the snapshot the LWS wsi object
-  // itself is still alive (lws_context_destroy runs only after this thread exits).
+  // Native WSI access and context destruction belong to this backend thread.
   struct lws* const wsi = ws->wsi;
   if (wsi == NULL) {
     WEBSOCKET_DEBUG_PRINTF("%s(), ws->wsi is NULL\n", __func__);
@@ -408,6 +409,7 @@ int WebsocketClientOnClientConnectionError(WebsocketClient* self, const char* in
 int WebsocketClientOnWsiDestroy(WebsocketClient* self) {
   Websocket* const ws = WEBSOCKET(self);
   WEBSOCKET_DEBUG_PRINTF("Destroying the wsi\n");
+  ws->wsi = NULL;
   WebsocketUserCallback(ws, kWebsocketCallbackTypeClose, "", 0);
   return 0;
 }

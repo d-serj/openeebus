@@ -23,6 +23,7 @@
 
 #include <libwebsockets.h>
 
+#include <stdatomic.h>
 #include "src/common/debug.h"
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_malloc.h"
@@ -33,9 +34,11 @@
 #include "src/ship/api/http_server_interface.h"
 #include "src/ship/api/tls_certificate_interface.h"
 #include "src/ship/api/websocket_creator_interface.h"
+#include "src/ship/websocket/http_server.h"
 #include "src/ship/websocket/websocket_creator.h"
 #include "src/ship/websocket/websocket_debug.h"
 #include "src/ship/websocket/websocket_internal.h"
+#include "src/ship/websocket/websocket_server.h"
 #include "src/ship/websocket/websocket_server_creator.h"
 
 /** Set HTTP_SERVER_DEBUG 1 to enable debug prints */
@@ -70,7 +73,7 @@ struct HttpServer {
   /** Implements the Http Server Interface */
   HttpServerObject obj;
 
-  bool cancel;
+  atomic_bool cancel;
   EebusThreadObject* thread;
   EebusMutexObject* mutex;
 
@@ -109,6 +112,7 @@ static void HttpServerConstruct(
     void* conn_establish_ctx
 );
 
+static void HttpServerDrainCloseRequests(HttpServer* self);
 static void HttpServerStaggerCallback(lws_sorted_usec_list_t* sul);
 static struct lws_context* HttpServerContextCreate(HttpServer* self);
 static void* HttpServerConnectionLoop(void* self);
@@ -155,7 +159,7 @@ void HttpServerConstruct(
 
   self->tls_cert = tls_cert;
   self->thread   = NULL;
-  self->cancel   = false;
+  atomic_init(&self->cancel, false);
 
   self->conn_establish_cb  = conn_establish_cb;
   self->conn_establish_ctx = conn_establish_ctx;
@@ -176,13 +180,19 @@ HttpServerObject* HttpServerCreate(
 ) {
   HttpServer* const http_server = (HttpServer*)EEBUS_MALLOC(sizeof(HttpServer));
 
+  if (http_server == NULL) return NULL;
   HttpServerConstruct(http_server, port, tls_cert, conn_establish_cb, conn_establish_ctx);
+  if (http_server->mutex == NULL) {
+    HttpServerDelete(HTTP_SERVER_OBJECT(http_server));
+    return NULL;
+  }
 
   return HTTP_SERVER_OBJECT(http_server);
 }
 
 void Destruct(HttpServerObject* self) {
   HttpServer* const srv = HTTP_SERVER(self);
+  Stop(self);
 
   if (srv->lws_ctx != NULL) {
     lws_context_destroy(srv->lws_ctx);
@@ -201,10 +211,11 @@ void Destruct(HttpServerObject* self) {
 void HttpServerStaggerCallback(lws_sorted_usec_list_t* sul) {
   HttpServer* const srv = lws_container_of(sul, HttpServer, sul_stagger);
 
+  HttpServerDrainCloseRequests(srv);
   EEBUS_MUTEX_LOCK(srv->mutex);
   for (size_t i = 0; i < VectorGetSize(&srv->wsi_ws_entries); ++i) {
     const WsiWsEntry* const entry = (WsiWsEntry*)VectorGetElement(&srv->wsi_ws_entries, i);
-    if (!WEBSOCKET_IS_CLOSED(entry->ws)) {
+    if (entry->ws != NULL && !WEBSOCKET_IS_CLOSED(entry->ws)) {
       WEBSOCKET_SCHEDULE_WRITE(entry->ws);
     }
   }
@@ -257,6 +268,20 @@ void* HttpServerConnectionLoop(void* self) {
     err = lws_service(srv->lws_ctx, 100);
   } while ((err >= 0) && (!srv->cancel));
 
+  lws_sul_cancel(&srv->sul_stagger);
+  /* Even an error exit must release owners waiting for backend retirement. */
+  while (VectorGetSize(&srv->wsi_ws_entries) != 0) {
+    WsiWsEntry* entry = VectorGetElement(&srv->wsi_ws_entries, 0);
+    Websocket* ws     = WEBSOCKET(entry->ws);
+    if (ws != NULL) WebsocketOnClose(WEBSOCKET_OBJECT(ws));
+    HttpServerUnbindWsi(HTTP_SERVER_OBJECT(srv), entry->wsi);
+    if (ws != NULL) WebsocketBackendDetached(ws);
+  }
+  EEBUS_MUTEX_LOCK(srv->mutex);
+  struct lws_context* context = srv->lws_ctx;
+  srv->lws_ctx                = NULL;
+  EEBUS_MUTEX_UNLOCK(srv->mutex);
+  lws_context_destroy(context);
   return NULL;
 }
 
@@ -278,7 +303,8 @@ EebusError HttpServerTryStart(HttpServer* self) {
 
 EebusError Start(HttpServerObject* self) {
   HttpServer* const srv = HTTP_SERVER(self);
-
+  if (srv->thread != NULL) return kEebusErrorOk;
+  srv->cancel    = false;
   EebusError ret = HttpServerTryStart(srv);
 
   return ret;
@@ -288,6 +314,11 @@ void Stop(HttpServerObject* self) {
   HttpServer* const srv = HTTP_SERVER(self);
   HTTP_SERVER_DEBUG_PRINTF("Stopping HTTP server\n");
   srv->cancel = true;
+  if (srv->mutex != NULL) {
+    EEBUS_MUTEX_LOCK(srv->mutex);
+    if (srv->lws_ctx != NULL) lws_cancel_service(srv->lws_ctx);
+    EEBUS_MUTEX_UNLOCK(srv->mutex);
+  }
 
   if (srv->thread != NULL) {
     EEBUS_THREAD_JOIN(srv->thread);
@@ -295,6 +326,10 @@ void Stop(HttpServerObject* self) {
     srv->thread = NULL;
   }
 
+  if (srv->lws_ctx != NULL) {
+    lws_context_destroy(srv->lws_ctx);
+    srv->lws_ctx = NULL;
+  }
   HTTP_SERVER_DEBUG_PRINTF("HTTP server stopped\n");
 }
 
@@ -317,6 +352,33 @@ void HttpServerUnbindWsi(HttpServerObject* self, struct lws* wsi) {
   EEBUS_MUTEX_UNLOCK(srv->mutex);
 }
 
+bool HttpServerBindWsi(HttpServerObject* self, struct lws* wsi, WebsocketObject* ws) {
+  HttpServer* srv = HTTP_SERVER(self);
+  for (size_t i = 0; i < VectorGetSize(&srv->wsi_ws_entries); ++i) {
+    WsiWsEntry* entry = VectorGetElement(&srv->wsi_ws_entries, i);
+    if (entry->wsi == wsi && entry->ws == NULL) {
+      entry->ws = ws;
+      return true;
+    }
+  }
+  return false;
+}
+
+static void HttpServerDrainCloseRequests(HttpServer* srv) {
+  for (size_t i = 0; i < VectorGetSize(&srv->wsi_ws_entries);) {
+    WsiWsEntry* entry = VectorGetElement(&srv->wsi_ws_entries, i);
+    Websocket* ws     = WEBSOCKET(entry->ws);
+    if (ws == NULL || !WebsocketCloseRequested(ws)) {
+      ++i;
+      continue;
+    }
+    struct lws* wsi = entry->wsi;
+    HttpServerUnbindWsi(HTTP_SERVER_OBJECT(srv), wsi);
+    lws_set_timeout(wsi, PENDING_TIMEOUT_CLOSE_SEND, LWS_TO_KILL_ASYNC);
+    WebsocketBackendDetached(ws);
+  }
+}
+
 // LWS Handlers
 int HttpServerOnClientConnect(HttpServer* self, struct lws* wsi) {
   const char* ski = WebsocketGetSkiWithWsi(wsi);
@@ -331,33 +393,30 @@ int HttpServerOnClientConnect(HttpServer* self, struct lws* wsi) {
     return -1;
   }
 
+  WsiWsEntry* entry = WsiWsEntryCreate(wsi, NULL);
+  if (entry == NULL) {
+    StringDelete((char*)ski);
+    return -1;
+  }
+  size_t before = VectorGetSize(&self->wsi_ws_entries);
+  VectorPushBack(&self->wsi_ws_entries, entry);
+  if (before == VectorGetSize(&self->wsi_ws_entries)) {
+    EEBUS_FREE(entry);
+    StringDelete((char*)ski);
+    return -1;
+  }
   WebsocketCreatorObject* websocket_creator = WebsocketServerCreatorCreate(HTTP_SERVER_OBJECT(self), wsi);
-
-  const int ret = self->conn_establish_cb(ski, websocket_creator, self->conn_establish_ctx);
+  int ret = websocket_creator == NULL ? -1 : self->conn_establish_cb(ski, websocket_creator, self->conn_establish_ctx);
   WebsocketCreatorDelete(websocket_creator);
   StringDelete((char*)ski);
-  if (ret != 0) {
-    HTTP_SERVER_DEBUG_PRINTF("%s(), conn_establish_cb() failed: %d\n", __func__, ret);
+  if (entry->ws == NULL) {
+    VectorRemove(&self->wsi_ws_entries, entry);
+    EEBUS_FREE(entry);
     return -1;
   }
-
-  WebsocketObject* const ws = (WebsocketObject*)lws_wsi_user(wsi);
-  if (ws == NULL) {
-    HTTP_SERVER_DEBUG_PRINTF("%s(), websocket object is NULL\n", __func__);
-    return -1;
-  }
-
-  WsiWsEntry* const entry = WsiWsEntryCreate(wsi, ws);
-  if (entry == NULL) {
-    HTTP_SERVER_DEBUG_PRINTF("%s(), EEBUS_MALLOC failed\n", __func__);
-    return -1;
-  }
-
-  EEBUS_MUTEX_LOCK(self->mutex);
-  VectorPushBack(&self->wsi_ws_entries, entry);
-  EEBUS_MUTEX_UNLOCK(self->mutex);
-
-  lws_sul_schedule(self->lws_ctx, 0, &self->sul_stagger, HttpServerStaggerCallback, kWebsocketStaggerDelay);
+  if (ret != 0) WebsocketClose(entry->ws, 0, "start failed");
+  HttpServerDrainCloseRequests(self);
+  if (ret != 0) return -1;
 
   return 0;
 }
@@ -402,9 +461,9 @@ int HttpServerOnConnectionClose(HttpServer* self, struct lws* wsi) {
     return -1;
   }
 
-  WEBSOCKET_CLOSE(ws, 0, "");
   WebsocketOnClose(ws);
-  lws_cancel_service(self->lws_ctx);
+  HttpServerUnbindWsi(HTTP_SERVER_OBJECT(self), wsi);
+  WebsocketBackendDetached(WEBSOCKET(ws));
   return 0;
 }
 
@@ -424,7 +483,10 @@ int HttpServerServiceCallback(struct lws* wsi, enum lws_callback_reasons reason,
 
     case LWS_CALLBACK_CLOSED: ret = HttpServerOnConnectionClose(srv, wsi); break;
 
-    case LWS_CALLBACK_EVENT_WAIT_CANCELLED: ret = 0; break;
+    case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
+      HttpServerDrainCloseRequests(srv);
+      ret = 0;
+      break;
 
     default: break;
   }

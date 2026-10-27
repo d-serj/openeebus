@@ -19,6 +19,8 @@
  */
 
 #include "src/ship/websocket/websocket_server.h"
+#include "src/common/eebus_queue/eebus_queue.h"
+#include "src/common/eebus_thread/eebus_thread.h"
 #include "src/ship/api/http_server_interface.h"
 #include "src/ship/websocket/websocket.h"
 #include "src/ship/websocket/websocket_debug.h"
@@ -62,6 +64,7 @@ EebusError WebsocketServerConstruct(
     WebsocketCallback cb,
     void* ctx
 ) {
+  self->server   = NULL;
   EebusError ret = WebsocketConstruct(WEBSOCKET(self), cb, ctx);
   // Override "virtual functions table"
   WEBSOCKET_INTERFACE(self) = &websocket_server_methods;
@@ -81,8 +84,13 @@ void Destruct(WebsocketObject* self) {
 
   Websocket* const ws = WEBSOCKET(self);
 
-  ws->wsi = NULL;
-
+  if (wss->server != NULL) {
+    WebsocketClose(self, 0, "");
+    bool detached;
+    EEBUS_QUEUE_RECEIVE(ws->retirement_reply, &detached, kTimeoutInfinite);
+  }
+  /* The backend has removed both its entry and lws_wsi_user before acknowledging. */
+  ws->lws_ctx = NULL;
   wss->server = NULL;
 
   WebsocketDestruct(WEBSOCKET_OBJECT(ws));
@@ -102,14 +110,18 @@ WebsocketObject* WebsocketServerOpen(HttpServerObject* srv, struct lws* wsi, Web
     return NULL;
   }
 
+  if (!HttpServerBindWsi(srv, wsi, WEBSOCKET_OBJECT(wss))) {
+    wss->server         = NULL;
+    WEBSOCKET(wss)->wsi = NULL;
+    WebsocketDelete(WEBSOCKET_OBJECT(wss));
+    return NULL;
+  }
+  WEBSOCKET(wss)->lws_ctx = lws_get_context(wsi);
   lws_set_wsi_user(wsi, wss);
 
   return WEBSOCKET_OBJECT(wss);
 }
 
 void WebsocketServerClose(WebsocketObject* self, int32_t close_code, const char* reason) {
-  WebsocketServer* const wss = WEBSOCKET_SERVER(self);
-
-  HttpServerUnbindWsi(wss->server, WEBSOCKET(self)->wsi);
   WebsocketClose(self, close_code, reason);
 }

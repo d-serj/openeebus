@@ -23,6 +23,7 @@
 #include "src/ship/api/tls_certificate_interface.h"
 #include "src/ship/api/websocket_creator_interface.h"
 #include "src/ship/websocket/websocket_client.h"
+#include "src/ship/websocket/websocket_creator.h"
 
 typedef struct WebsocketClientCreator WebsocketClientCreator;
 
@@ -71,7 +72,12 @@ WebsocketClientCreatorCreate(const char* uri, TlsCertificateObject* tls_cert, co
   WebsocketClientCreator* const websocket_creator
       = (WebsocketClientCreator*)EEBUS_MALLOC(sizeof(WebsocketClientCreator));
 
+  if (websocket_creator == NULL) return NULL;
   WebsocketClientCreatorConstruct(websocket_creator, uri, tls_cert, remote_ski);
+  if (websocket_creator->uri == NULL || websocket_creator->remote_ski == NULL) {
+    WebsocketCreatorDelete(WEBSOCKET_CREATOR_OBJECT(websocket_creator));
+    return NULL;
+  }
 
   return WEBSOCKET_CREATOR_OBJECT(websocket_creator);
 }

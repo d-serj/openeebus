@@ -58,6 +58,7 @@ void WebsocketCreatorConstruct(WebsocketCreatorWsi* self, HttpServerObject* srv,
 WebsocketCreatorObject* WebsocketServerCreatorCreate(HttpServerObject* srv, struct lws* wsi) {
   WebsocketCreatorWsi* const websocket_creator = (WebsocketCreatorWsi*)EEBUS_MALLOC(sizeof(WebsocketCreatorWsi));
 
+  if (websocket_creator == NULL) return NULL;
   WebsocketCreatorConstruct(websocket_creator, srv, wsi);
 
   return WEBSOCKET_CREATOR_OBJECT(websocket_creator);
