@@ -28,8 +28,8 @@ struct StringLutRecord {
   StringLutValueDeleter deleter;
 };
 
-static EebusError StringLutRecordInit(
-    StringLutRecord* record, const char* key, void* value, StringLutValueDeleter deleter);
+static EebusError
+StringLutRecordInit(StringLutRecord* record, const char* key, void* value, StringLutValueDeleter deleter);
 static StringLutRecord* StringLutRecordCreate(const char* key, void* value, StringLutValueDeleter deleter);
 static void StringLutRecordRelease(StringLutRecord* record);
 static void StringLutRecordDelete(StringLutRecord* record);
@@ -83,7 +83,9 @@ void StringLutRecordDelete(StringLutRecord* record) {
   EEBUS_FREE(record);
 }
 
-void StringLutInit(StringLut* lut) { VectorConstruct(&lut->records); }
+void StringLutInit(StringLut* lut) {
+  VectorConstruct(&lut->records);
+}
 
 void StringLutRelease(StringLut* lut) {
   for (size_t i = 0; i < VectorGetSize(&lut->records); ++i) {
@@ -123,7 +125,14 @@ EebusError StringLutInsert(StringLut* lut, const char* key, void* value, StringL
     return kEebusErrorMemoryAllocate;
   }
 
+  const size_t before = VectorGetSize(&lut->records);
   VectorPushBack(&lut->records, record);
+  if (VectorGetSize(&lut->records) == before) {
+    /* Ownership of the supplied value transfers only after insertion succeeds. */
+    record->deleter = NULL;
+    StringLutRecordDelete(record);
+    return kEebusErrorMemoryAllocate;
+  }
   return kEebusErrorOk;
 }
 
@@ -138,7 +147,9 @@ EebusError StringLutRemove(StringLut* lut, const char* key) {
   return kEebusErrorOk;
 }
 
-size_t StringLutGetSize(const StringLut* lut) { return VectorGetSize(&lut->records); }
+size_t StringLutGetSize(const StringLut* lut) {
+  return VectorGetSize(&lut->records);
+}
 
 void* StringLutGetElementValue(const StringLut* lut, size_t idx) {
   const StringLutRecord* const record = (const StringLutRecord*)VectorGetElement(&lut->records, idx);

@@ -130,6 +130,7 @@ void VectorPushBack(Vector* self, void* element) {
 
   if (buffer_size > self->buffer_size) {
     buffer = (void**)EEBUS_MALLOC(buffer_size);
+    if (buffer == NULL) return;
   }
 
   if (buffer != NULL) {

@@ -116,3 +116,15 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/model/scaled_value
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/specialization/helper
     ${EXECUTABLE_OUTPUT_PATH}/use_case/specialization/helper)
+
+# Exercise growth failure in the C implementation without changing its public API.
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  add_executable(vector_allocation_test common/vector/vector_allocation_test.c)
+  target_include_directories(vector_allocation_test PRIVATE ${OPENEEBUS_SOURCE_DIR})
+  target_compile_options(vector_allocation_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+  add_test(NAME vector_allocation_test COMMAND vector_allocation_test)
+  add_executable(string_lut_allocation_test common/string_lut/string_lut_allocation_test.c)
+  target_include_directories(string_lut_allocation_test PRIVATE ${OPENEEBUS_SOURCE_DIR})
+  target_compile_options(string_lut_allocation_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+  add_test(NAME string_lut_allocation_test COMMAND string_lut_allocation_test)
+endif()
