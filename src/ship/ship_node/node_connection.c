@@ -61,6 +61,7 @@ static uint32_t RetryDelayMs(int attempt_cnt);
 
 EebusError
 NodeConnectionConstruct(NodeConnection* nc, const char* ski, struct ShipNode* owner, NodeConnectionRetryFn retry_fn) {
+  *nc = (NodeConnection){0};
   // Override "virtual function table"
   NODE_CONNECTION_INTERFACE(nc) = &node_connection_methods;
 
@@ -72,6 +73,12 @@ NodeConnectionConstruct(NodeConnection* nc, const char* ski, struct ShipNode* ow
   nc->service_details    = NULL;
   nc->owner              = owner;
   nc->retry_timer        = NULL;
+  nc->current            = NULL;
+  nc->replacement        = NULL;
+  nc->retry_due          = false;
+  nc->removing           = false;
+  nc->collision_yields   = 0;
+  nc->retry_generation   = 0;
 
   if (retry_fn == NULL) {
     return kEebusErrorInputArgumentNull;
@@ -227,13 +234,17 @@ EebusError ClientConnect(NodeConnectionObject* self, WebsocketCreatorObject* wsc
 
 EebusError ServerConnect(NodeConnectionObject* self, WebsocketCreatorObject* wsc, const char* ship_id) {
   NodeConnection* const nc = NODE_CONNECTION(self);
-
-  nc->connection = ShipConnectionCreate(INFO_PROVIDER_OBJECT(nc->owner), kShipRoleServer, ship_id, nc->ski, "");
-  if (nc->connection == NULL) {
-    return kEebusErrorMemoryAllocate;
+  if (wsc == NULL) return kEebusErrorInputArgumentNull;
+  if (nc->is_attempt_running) return kEebusErrorCommunicationBusy;
+  ShipConnectionObject* candidate
+      = ShipConnectionCreate(INFO_PROVIDER_OBJECT(nc->owner), kShipRoleServer, ship_id, nc->ski, "");
+  if (candidate == NULL) return kEebusErrorMemoryAllocate;
+  const EebusError err = SHIP_CONNECTION_START(candidate, wsc);
+  if (err != kEebusErrorOk) {
+    ShipConnectionDelete(candidate);
+    return err;
   }
-
+  nc->connection         = candidate;
   nc->is_attempt_running = true;
-  SHIP_CONNECTION_START(nc->connection, wsc);
   return kEebusErrorOk;
 }

@@ -40,6 +40,14 @@ struct NodeConnection {
   ServiceDetails* service_details;
   struct ShipNode* owner;
   EebusTimerObject* retry_timer;
+  struct ShipNodeAttempt* current;
+  struct ShipNodeAttempt* replacement;
+  bool retry_due;
+  bool removing;
+  bool register_pending;
+  unsigned collision_yields;
+  uint64_t retry_generation;
+  uint64_t retry_arm_generation;
 };
 
 #define NODE_CONNECTION(obj) ((NodeConnection*)(obj))

@@ -24,6 +24,8 @@
 
 static ShipConnectionMock* ship_connection_mock = nullptr;
 
+static WebsocketCreatorObject server_creator{};
+
 ShipConnectionObject* ShipConnectionCreate(InfoProviderObject*, ShipRole, const char*, const char*, const char*) {
   ship_connection_mock = ShipConnectionMockCreate();
   return SHIP_CONNECTION_OBJECT(ship_connection_mock);
@@ -75,7 +77,7 @@ TEST_F(NodeConnectionTest, OnConnectionClosedIncrements) {
 
 TEST_F(NodeConnectionTest, OwnsConnection) {
   ship_connection_mock = nullptr;
-  NODE_CONNECTION_SERVER_CONNECT(nc_, nullptr, "ship_id");
+  NODE_CONNECTION_SERVER_CONNECT(nc_, &server_creator, "ship_id");
   ShipConnectionMockGuard sc_guard{ship_connection_mock};
   ShipConnectionObject* sc = SHIP_CONNECTION_OBJECT(ship_connection_mock);
   ASSERT_NE(sc, nullptr);
@@ -91,7 +93,7 @@ TEST_F(NodeConnectionTest, OwnsConnection) {
 
 TEST_F(NodeConnectionTest, ReleaseShipConnection) {
   ship_connection_mock = nullptr;
-  NODE_CONNECTION_SERVER_CONNECT(nc_, nullptr, "ship_id");
+  NODE_CONNECTION_SERVER_CONNECT(nc_, &server_creator, "ship_id");
   ShipConnectionMockGuard sc_guard{ship_connection_mock};
   ShipConnectionObject* sc = SHIP_CONNECTION_OBJECT(ship_connection_mock);
   ASSERT_NE(sc, nullptr);
@@ -104,7 +106,7 @@ TEST_F(NodeConnectionTest, ReleaseShipConnection) {
 
 TEST_F(NodeConnectionTest, ClientConnectBusyGuard) {
   ship_connection_mock = nullptr;
-  NODE_CONNECTION_SERVER_CONNECT(nc_, nullptr, "ship_id");
+  NODE_CONNECTION_SERVER_CONNECT(nc_, &server_creator, "ship_id");
   ShipConnectionMockGuard sc_guard{ship_connection_mock};
 
   EXPECT_TRUE(NODE_CONNECTION_IS_ATTEMPT_RUNNING(nc_));

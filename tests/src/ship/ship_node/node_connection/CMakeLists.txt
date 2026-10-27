@@ -67,3 +67,13 @@ add_test(
 )
 
 gtest_discover_tests(${TEST_NAME})
+
+if(TARGET openeebus)
+  add_executable(node_attempt_test node_attempt_test.c)
+  target_link_libraries(node_attempt_test PRIVATE openeebus)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(node_attempt_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+  endif()
+  add_test(NAME node_attempt_test COMMAND node_attempt_test)
+  set_tests_properties(node_attempt_test PROPERTIES TIMEOUT 5)
+endif()

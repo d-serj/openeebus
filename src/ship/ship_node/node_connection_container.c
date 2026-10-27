@@ -24,6 +24,7 @@
 
 #include "node_connection.h"
 #include "src/common/eebus_malloc.h"
+#include "src/common/string_util.h"
 #include "src/common/vector.h"
 
 typedef struct NodeConnectionContainer NodeConnectionContainer;
@@ -117,7 +118,12 @@ NodeConnectionObject* GetOrCreate(
   }
 
   NodeConnectionContainer* const ncc = NODE_CONNECTION_CONTAINER(self);
+  size_t before                      = VectorGetSize(&ncc->items);
   VectorPushBack(&ncc->items, nc);
+  if (VectorGetSize(&ncc->items) == before) {
+    NodeConnectionDelete(nc);
+    return NULL;
+  }
   return nc;
 }
 
@@ -126,7 +132,7 @@ NodeConnectionObject* FindWithSki(NodeConnectionContainerObject* self, const cha
 
   for (size_t i = 0; i < VectorGetSize(&ncc->items); ++i) {
     NodeConnectionObject* nc = (NodeConnectionObject*)VectorGetElement(&ncc->items, i);
-    if (strcmp(NODE_CONNECTION_GET_SKI(nc), ski) == 0) {
+    if (StringEqualsIgnoreCase(NODE_CONNECTION_GET_SKI(nc), ski)) {
       return nc;
     }
   }

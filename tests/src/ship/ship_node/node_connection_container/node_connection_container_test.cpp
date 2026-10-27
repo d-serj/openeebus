@@ -25,6 +25,7 @@
 #include "tests/src/mocks/ship/ship_connection/ship_connection_mock.h"
 
 static ShipConnectionMock* ship_connection_mock = nullptr;
+static WebsocketCreatorObject server_creator{};
 
 ShipConnectionObject* ShipConnectionCreate(InfoProviderObject*, ShipRole, const char*, const char*, const char*) {
   ship_connection_mock = ShipConnectionMockCreate();
@@ -103,7 +104,7 @@ TEST_F(NodeConnectionContainerTest, IsSkiConnected) {
   EXPECT_FALSE(NODE_CONNECTION_CONTAINER_IS_SKI_CONNECTED(ncc_.get(), "ski_f"));
 
   ship_connection_mock = nullptr;
-  NODE_CONNECTION_SERVER_CONNECT(nc, nullptr, "ship_id");
+  NODE_CONNECTION_SERVER_CONNECT(nc, &server_creator, "ship_id");
   ShipConnectionMockGuard sc_guard{ship_connection_mock};
   EXPECT_TRUE(NODE_CONNECTION_CONTAINER_IS_SKI_CONNECTED(ncc_.get(), "ski_f"));
 
@@ -114,7 +115,7 @@ TEST_F(NodeConnectionContainerTest, IsSkiConnected) {
 TEST_F(NodeConnectionContainerTest, FindWithShipConnection) {
   NodeConnectionObject* nc = GetOrCreate("ski_g");
   ship_connection_mock     = nullptr;
-  NODE_CONNECTION_SERVER_CONNECT(nc, nullptr, "ship_id");
+  NODE_CONNECTION_SERVER_CONNECT(nc, &server_creator, "ship_id");
   ShipConnectionMockGuard sc_guard{ship_connection_mock};
   ShipConnectionObject* sc = SHIP_CONNECTION_OBJECT(ship_connection_mock);
   ASSERT_NE(sc, nullptr);

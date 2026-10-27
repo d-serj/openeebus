@@ -46,6 +46,7 @@ struct ShipNode {
   EebusMutexObject* mutex;
   bool search_for_remote_ski;
   bool cancel;
+  uint64_t next_attempt_id;
   EebusThreadObject* connection_thread;
 
   NodeConnectionContainerObject* connections;
