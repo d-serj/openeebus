@@ -396,6 +396,203 @@ TEST_F(EgLpcTestFixture, EgLpcTest) {
   // 45. Receive the reply -> OnPowerNominalMaxReceive with updated value (12000W)
   EXPECT_CALL(*eg_lpc_listener_mock_->gmock, OnPowerNominalMaxReceive(_, ScaledValueEq(12000, 0)));
   HandleMessage(receive::electrical_connection_characteristic_reply_ref_29);
+  // A partial notification carries identity and value, while its type remains in the cache.
+  constexpr char partial_nominal[] = R"({
+  "datagram": [
+    {
+      "header": [
+        {
+          "specificationVersion": "1.3.0"
+        },
+        {
+          "addressSource": [
+            {
+              "device": "d:_n:HeatPump_123456789"
+            },
+            {
+              "entity": [
+                1
+              ]
+            },
+            {
+              "feature": 5
+            }
+          ]
+        },
+        {
+          "addressDestination": [
+            {
+              "device": "d:_n:HEMS_123456789"
+            },
+            {
+              "entity": [
+                1
+              ]
+            },
+            {
+              "feature": 4
+            }
+          ]
+        },
+        {
+          "msgCounter": 80
+        },
+        {
+          "cmdClassifier": "notify"
+        }
+      ]
+    },
+    {
+      "payload": [
+        {
+          "cmd": [
+            [
+              {
+                "filter": [
+                  [
+                    {
+                      "cmdControl": [
+                        {
+                          "partial": []
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              },
+              {
+                "electricalConnectionCharacteristicListData": [
+                  {
+                    "electricalConnectionCharacteristicData": [
+                      [
+                        {
+                          "electricalConnectionId": 0
+                        },
+                        {
+                          "characteristicId": 0
+                        },
+                        {
+                          "value": [
+                            {
+                              "number": 13000
+                            },
+                            {
+                              "scale": 0
+                            }
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+})";
+  EXPECT_CALL(*eg_lpc_listener_mock_->gmock, OnPowerNominalMaxReceive(_, ScaledValueEq(13000, 0)));
+  HandleMessage(partial_nominal);
+  constexpr char unrelated_characteristic[] = R"({
+  "datagram": [
+    {
+      "header": [
+        {
+          "specificationVersion": "1.3.0"
+        },
+        {
+          "addressSource": [
+            {
+              "device": "d:_n:HeatPump_123456789"
+            },
+            {
+              "entity": [
+                1
+              ]
+            },
+            {
+              "feature": 5
+            }
+          ]
+        },
+        {
+          "addressDestination": [
+            {
+              "device": "d:_n:HEMS_123456789"
+            },
+            {
+              "entity": [
+                1
+              ]
+            },
+            {
+              "feature": 4
+            }
+          ]
+        },
+        {
+          "msgCounter": 80
+        },
+        {
+          "cmdClassifier": "notify"
+        }
+      ]
+    },
+    {
+      "payload": [
+        {
+          "cmd": [
+            [
+              {
+                "filter": [
+                  [
+                    {
+                      "cmdControl": [
+                        {
+                          "partial": []
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              },
+              {
+                "electricalConnectionCharacteristicListData": [
+                  {
+                    "electricalConnectionCharacteristicData": [
+                      [
+                        {
+                          "electricalConnectionId": 0
+                        },
+                        {
+                          "characteristicId": 99
+                        },
+                        {
+                          "value": [
+                            {
+                              "number": 13000
+                            },
+                            {
+                              "scale": 0
+                            }
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+})";
+  EXPECT_CALL(*eg_lpc_listener_mock_->gmock, OnPowerNominalMaxReceive(_, _)).Times(0);
+  HandleMessage(unrelated_characteristic);
 
   // 46. Expect the remote entity disconnect event while tearing down the use case
   EXPECT_CALL(*eg_lpc_listener_mock_->gmock, OnRemoteCsRemoved(_, _));

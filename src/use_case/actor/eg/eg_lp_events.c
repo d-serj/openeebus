@@ -236,8 +236,25 @@ void OnElectricalConnectionCharacteristicDataUpdate(const EgLpUseCase* self, con
   const ElectricalConnectionCharacteristicDataType* const primary_filter     = EgLpNominalMaxPrimaryFilter(self);
   const ElectricalConnectionCharacteristicDataType* const contractual_filter = EgLpNominalMaxContractualFilter(self);
 
-  if (ElectricalConnectionCommonCheckCharacteristicWithFilter(payload->function_data, primary_filter)
-      || ElectricalConnectionCommonCheckCharacteristicWithFilter(payload->function_data, contractual_filter)) {
+  const ElectricalConnectionCharacteristicListDataType* changes = payload->function_data;
+  const ElectricalConnectionCharacteristicListDataType* cached
+      = HelperGetFeatureData(NULL, payload->feature, kFunctionTypeElectricalConnectionCharacteristicListData);
+  bool relevant = false;
+  for (size_t i = 0; changes != NULL && i < changes->electrical_connection_characteristic_data_size; ++i) {
+    const ElectricalConnectionCharacteristicDataType* change = changes->electrical_connection_characteristic_data[i];
+    if (change == NULL || change->characteristic_id == NULL) continue;
+    const ElectricalConnectionCharacteristicDataType identity = {
+        .electrical_connection_id = change->electrical_connection_id,
+        .characteristic_id        = change->characteristic_id,
+    };
+    const ElectricalConnectionCharacteristicDataType* characteristic
+        = HelperGetListUniqueMatch(kFunctionTypeElectricalConnectionCharacteristicListData, cached, &identity);
+    if (characteristic == NULL) continue;
+    const ElectricalConnectionCharacteristicListDataType one = {&characteristic, 1};
+    relevant |= ElectricalConnectionCommonCheckCharacteristicWithFilter(&one, primary_filter)
+                || ElectricalConnectionCommonCheckCharacteristicWithFilter(&one, contractual_filter);
+  }
+  if (relevant) {
     const EntityAddressType* const entity_addr = ENTITY_GET_ADDRESS(ENTITY_OBJECT(payload->entity));
 
     ScaledValue power_limit = {0};
