@@ -85,3 +85,48 @@ TEST(EebusQueueTest, EebusQueueTestGeneric) {
   EXPECT_EQ(heap_used, 0);
   CheckForMemoryLeaks();
 }
+
+#include <atomic>
+#include <thread>
+#include "src/common/eebus_queue/eebus_queue_internal.h"
+
+TEST(EebusQueueClose, WakesAllBlockedSendersAndPreservesFullQueueOwnership) {
+  static std::atomic<int> freed;
+  freed       = 0;
+  auto* queue = EebusQueueCreate(1, sizeof(int), [](void*) { ++freed; });
+  ASSERT_NE(queue, nullptr);
+  int value = 7;
+  ASSERT_EQ(EEBUS_QUEUE_SEND(queue, &value, 0), kEebusErrorOk);
+  std::atomic<int> entered  = 0;
+  std::atomic<int> returned = 0;
+  auto producer             = [&] {
+    ++entered;
+    if (EEBUS_QUEUE_SEND(queue, &value, kTimeoutInfinite) == kEebusErrorNoChange) ++returned;
+  };
+  std::thread first(producer), second(producer);
+  while (entered != 2) std::this_thread::yield();
+  EebusQueueClose(queue);
+  first.join();
+  second.join();
+  EXPECT_EQ(returned, 2);
+  EebusQueueDelete(queue);
+  EXPECT_EQ(freed, 1);
+}
+
+TEST(EebusQueueClose, WakesReceiverAndCanBeClosedTwice) {
+  auto* queue = EebusQueueCreate(1, sizeof(int), nullptr);
+  ASSERT_NE(queue, nullptr);
+  std::atomic<bool> entered = false;
+  EebusError result         = kEebusErrorOk;
+  std::thread consumer([&] {
+    int value;
+    entered = true;
+    result  = EEBUS_QUEUE_RECEIVE(queue, &value, kTimeoutInfinite);
+  });
+  while (!entered) std::this_thread::yield();
+  EebusQueueClose(queue);
+  EebusQueueClose(queue);
+  consumer.join();
+  EXPECT_EQ(result, kEebusErrorNoChange);
+  EebusQueueDelete(queue);
+}

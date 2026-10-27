@@ -35,6 +35,7 @@
 #include "src/common/eebus_errors.h"
 #include "src/common/eebus_malloc.h"
 #include "src/common/eebus_queue/eebus_queue.h"
+#include "src/common/eebus_queue/eebus_queue_internal.h"
 
 typedef bool (*Predicate)(void* ctx);
 
@@ -168,6 +169,16 @@ EebusQueueObject* EebusQueueCreate(size_t max_msg, size_t msg_size, QueueMsgDeal
   return EEBUS_QUEUE_OBJECT(eebus_queue);
 }
 
+void EebusQueueClose(EebusQueueObject* self) {
+  if (self == NULL) return;
+  EebusQueue* const queue = EEBUS_QUEUE(self);
+  pthread_mutex_lock(&queue->mutex);
+  queue->is_closed = true;
+  pthread_cond_broadcast(&queue->is_not_full_cond);
+  pthread_cond_broadcast(&queue->is_not_empty_cond);
+  pthread_mutex_unlock(&queue->mutex);
+}
+
 void Destruct(EebusQueueObject* self) {
   EebusQueue* const queue = EEBUS_QUEUE(self);
 
@@ -176,8 +187,8 @@ void Destruct(EebusQueueObject* self) {
     pthread_mutex_lock(&queue->mutex);
     queue->is_closed = true;
 
-    pthread_cond_signal(&queue->is_not_full_cond);
-    pthread_cond_signal(&queue->is_not_empty_cond);
+    pthread_cond_broadcast(&queue->is_not_full_cond);
+    pthread_cond_broadcast(&queue->is_not_empty_cond);
 
     ClearInternal(queue);
 
@@ -324,15 +335,23 @@ EebusError Receive(EebusQueueObject* self, void* msg, uint32_t timeout_ms) {
 }
 
 bool IsEmpty(const EebusQueueObject* self) {
-  return EEBUS_QUEUE(self)->is_empty;
+  EebusQueue* queue = EEBUS_QUEUE(self);
+  pthread_mutex_lock(&queue->mutex);
+  bool empty = queue->is_empty;
+  pthread_mutex_unlock(&queue->mutex);
+  return empty;
 }
 
 bool IsFull(const EebusQueueObject* self) {
-  return EEBUS_QUEUE(self)->is_full;
+  EebusQueue* queue = EEBUS_QUEUE(self);
+  pthread_mutex_lock(&queue->mutex);
+  bool full = queue->is_full;
+  pthread_mutex_unlock(&queue->mutex);
+  return full;
 }
 
 void ClearInternal(EebusQueue* self) {
-  while (self->tail != self->head) {
+  while (!self->is_empty) {
     if (self->msg_deallocator != NULL) {
       self->msg_deallocator(self->tail);
     }
@@ -341,6 +360,7 @@ void ClearInternal(EebusQueue* self) {
     if (self->tail >= self->msg_buf + self->msg_size * self->max_msg) {
       self->tail = self->msg_buf;
     }
+    self->is_empty = (self->tail == self->head);
   }
 
   self->is_empty = true;

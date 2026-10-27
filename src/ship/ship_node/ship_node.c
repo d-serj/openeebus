@@ -593,7 +593,7 @@ void Stop(ShipNodeObject* self) {
 
   if (sn->connection_thread != NULL) {
     ShipNodeQueueMessage queue_msg = {.type = kShipNodeQueueMsgTypeCancel, .ski = NULL};
-    EEBUS_QUEUE_SEND(sn->msg_queue, &queue_msg, kTimeoutInfinite);
+    EEBUS_QUEUE_SEND(sn->msg_queue, &queue_msg, 0);
     EEBUS_THREAD_JOIN(sn->connection_thread);
     EebusThreadDelete(sn->connection_thread);
     sn->connection_thread = NULL;
