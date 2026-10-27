@@ -20,6 +20,7 @@
 
 #if __linux__
 
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -86,7 +87,14 @@ EebusError EebusTimerConstruct(EebusTimer* self, EebusTimerTimeoutCallback cb, v
   self->mutex_status = -1;
   self->timer_state  = kEebusTimerStateIdle;
 
-  self->cond_status = pthread_cond_init(&self->cond, NULL);
+  pthread_condattr_t attr;
+  if (pthread_condattr_init(&attr) != 0) return kEebusErrorInit;
+  if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) {
+    pthread_condattr_destroy(&attr);
+    return kEebusErrorInit;
+  }
+  self->cond_status = pthread_cond_init(&self->cond, &attr);
+  pthread_condattr_destroy(&attr);
   if (self->cond_status != 0) {
     return kEebusErrorInit;
   }
@@ -139,7 +147,7 @@ void Destruct(EebusTimerObject* self) {
 }
 
 void UpdateWaitCondTimeout(EebusTimer* eebus_timer) {
-  clock_gettime(CLOCK_REALTIME, &eebus_timer->timeout);
+  clock_gettime(CLOCK_MONOTONIC, &eebus_timer->timeout);
   eebus_timer->timeout.tv_sec += TIME_MS_TO_S(eebus_timer->timeout_ms);
   eebus_timer->timeout.tv_nsec += NANOSECONDS(eebus_timer->timeout_ms % 1000);
   if (eebus_timer->timeout.tv_nsec >= 1000000000) {
@@ -153,10 +161,13 @@ void* TimerLoop(void* parameters) {
 
   pthread_mutex_lock(&eebus_timer->mutex);
   while (!eebus_timer->cancel) {
-    pthread_cond_timedwait(&eebus_timer->cond, &eebus_timer->mutex, &eebus_timer->timeout);
+    int result = pthread_cond_timedwait(&eebus_timer->cond, &eebus_timer->mutex, &eebus_timer->timeout);
+    if (result != ETIMEDOUT) continue;
 
     if (!eebus_timer->cancel) {
+      pthread_mutex_unlock(&eebus_timer->mutex);
       eebus_timer->cb(eebus_timer->ctx);
+      pthread_mutex_lock(&eebus_timer->mutex);
 
       if (eebus_timer->autoreload) {
         UpdateWaitCondTimeout(eebus_timer);
@@ -203,12 +214,12 @@ void Start(EebusTimerObject* self, uint32_t timeout_ms, bool autoreload) {
     return;
   }
 
-  eebus_timer->thread = EebusThreadCreate(TimerLoop, eebus_timer, 4096);
+  eebus_timer->timer_state = kEebusTimerStateRunning;
+  eebus_timer->thread      = EebusThreadCreate(TimerLoop, eebus_timer, 4096);
   if (eebus_timer->thread == NULL) {
+    eebus_timer->timer_state = kEebusTimerStateIdle;
     return;
   }
-
-  eebus_timer->timer_state = kEebusTimerStateRunning;
 }
 
 void Stop(EebusTimerObject* self) {
@@ -259,7 +270,10 @@ uint32_t GetRemainingTime(const EebusTimerObject* self) {
 
 EebusTimerState GetTimerState(const EebusTimerObject* self) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
-  return eebus_timer->timer_state;
+  pthread_mutex_lock(&eebus_timer->mutex);
+  EebusTimerState state = eebus_timer->timer_state;
+  pthread_mutex_unlock(&eebus_timer->mutex);
+  return state;
 }
 
 #endif  // __linux__

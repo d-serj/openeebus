@@ -20,6 +20,7 @@
 
 #if _WIN32
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <windows.h>
 
@@ -39,7 +40,7 @@ struct EebusTimer {
   HANDLE timer_handle;
   DWORD timeout_ms;
   bool autoreload;
-  EebusTimerState timer_state;
+  atomic_int timer_state;
   ULONGLONG start_tick;  // Windows tick count when timer started
 };
 
@@ -78,8 +79,8 @@ EebusError EebusTimerConstruct(EebusTimer* self, EebusTimerTimeoutCallback cb, v
   self->timer_handle = NULL;
   self->timeout_ms   = 0;
   self->autoreload   = false;
-  self->timer_state  = kEebusTimerStateIdle;
-  self->start_tick   = 0;
+  atomic_init(&self->timer_state, kEebusTimerStateIdle);
+  self->start_tick = 0;
 
   return kEebusErrorOk;
 }
@@ -102,7 +103,7 @@ EebusTimerObject* EebusTimerCreate(EebusTimerTimeoutCallback cb, void* ctx) {
 void Destruct(EebusTimerObject* self) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
   if (eebus_timer->timer_handle != NULL) {
-    DeleteTimerQueueTimer(NULL, eebus_timer->timer_handle, NULL);
+    DeleteTimerQueueTimer(NULL, eebus_timer->timer_handle, INVALID_HANDLE_VALUE);
     eebus_timer->timer_handle = NULL;
   }
 }
@@ -116,7 +117,7 @@ void Start(EebusTimerObject* self, uint32_t timeout_ms, bool autoreload) {
 
   // Stop any existing timer
   if (eebus_timer->timer_handle != NULL) {
-    DeleteTimerQueueTimer(NULL, eebus_timer->timer_handle, NULL);
+    DeleteTimerQueueTimer(NULL, eebus_timer->timer_handle, INVALID_HANDLE_VALUE);
     eebus_timer->timer_handle = NULL;
   }
 
@@ -145,7 +146,7 @@ void Stop(EebusTimerObject* self) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
 
   if (eebus_timer->timer_handle != NULL) {
-    DeleteTimerQueueTimer(NULL, eebus_timer->timer_handle, NULL);
+    DeleteTimerQueueTimer(NULL, eebus_timer->timer_handle, INVALID_HANDLE_VALUE);
     eebus_timer->timer_handle = NULL;
   }
 

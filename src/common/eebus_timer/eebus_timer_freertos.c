@@ -18,10 +18,16 @@
  * @brief EEBUS Timer Linux implementation
  */
 
+#include <stdatomic.h>
 #include <stdbool.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/timers.h"
+
+#if INCLUDE_xTimerPendFunctionCall != 1
+#error "Timer retirement requires INCLUDE_xTimerPendFunctionCall=1"
+#endif
 
 #include "src/common/api/eebus_timer_interface.h"
 #include "src/common/eebus_errors.h"
@@ -37,7 +43,9 @@ struct EebusTimer {
   EebusTimerTimeoutCallback cb;
   void* ctx;
   TimerHandle_t timer_handle;
-  EebusTimerState timer_state;
+  atomic_int timer_state;
+  SemaphoreHandle_t drained;
+  StaticSemaphore_t drained_storage;
 };
 
 #define EEBUS_TIMER(obj) ((EebusTimer*)(obj))
@@ -72,7 +80,9 @@ EebusError EebusTimerConstruct(EebusTimer* self, EebusTimerTimeoutCallback cb, v
   self->cb           = cb;
   self->ctx          = ctx;
   self->timer_handle = NULL;
-  self->timer_state  = kEebusTimerStateIdle;
+  atomic_init(&self->timer_state, kEebusTimerStateIdle);
+  self->drained = xSemaphoreCreateBinaryStatic(&self->drained_storage);
+  if (self->drained == NULL) return kEebusErrorInit;
 
   return kEebusErrorOk;
 }
@@ -92,23 +102,28 @@ EebusTimerObject* EebusTimerCreate(EebusTimerTimeoutCallback cb, void* ctx) {
   return EEBUS_TIMER_OBJECT(eebus_timer);
 }
 
+static void TimerDrained(void* ctx, uint32_t unused) {
+  (void)unused;
+  xSemaphoreGive(EEBUS_TIMER(ctx)->drained);
+}
+
 void Destruct(EebusTimerObject* self) {
-  EebusTimer* const eebus_timer = EEBUS_TIMER(self);
-  if (eebus_timer->timer_handle != NULL) {
-    xTimerDelete(eebus_timer->timer_handle, 0);
-    eebus_timer->timer_handle = NULL;
-  }
+  EebusTimer* timer = EEBUS_TIMER(self);
+  Stop(self);
+  if (timer->drained != NULL) vSemaphoreDelete(timer->drained);
 }
 
 void Start(EebusTimerObject* self, uint32_t timeout_ms, bool autoreload) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
 
+  Stop(self);
   if (timeout_ms == 0) {
     return;
   }
 
   BaseType_t autoreload_tmp = autoreload ? pdTRUE : pdFALSE;
   TickType_t timeout_ticks  = pdMS_TO_TICKS(timeout_ms);
+  if (timeout_ticks == 0) timeout_ticks = 1;
 
   eebus_timer->timer_handle
       = xTimerCreate("EebusTimer", timeout_ticks, autoreload_tmp, (void*)eebus_timer, EebusTimerExpiredCallback);
@@ -116,17 +131,22 @@ void Start(EebusTimerObject* self, uint32_t timeout_ms, bool autoreload) {
     return;
   }
 
-  xTimerStart(eebus_timer->timer_handle, 0);
   eebus_timer->timer_state = kEebusTimerStateRunning;
+  if (xTimerStart(eebus_timer->timer_handle, portMAX_DELAY) != pdPASS) Stop(self);
 }
 
 void Stop(EebusTimerObject* self) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
 
   if (eebus_timer->timer_handle != NULL) {
-    xTimerStop(eebus_timer->timer_handle, 0);
-    xTimerDelete(eebus_timer->timer_handle, 0);
+    /* Called by the owner task, never by the timer daemon or with callback locks held. */
+    configASSERT(xTaskGetCurrentTaskHandle() != xTimerGetTimerDaemonTaskHandle());
+    while (xTimerDelete(eebus_timer->timer_handle, portMAX_DELAY) != pdPASS) {
+    }
     eebus_timer->timer_handle = NULL;
+    while (xTimerPendFunctionCall(TimerDrained, eebus_timer, 0, portMAX_DELAY) != pdPASS) {
+    }
+    xSemaphoreTake(eebus_timer->drained, portMAX_DELAY);
   }
 
   if (eebus_timer->timer_state != kEebusTimerStateExpired) {

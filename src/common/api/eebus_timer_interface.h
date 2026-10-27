@@ -99,7 +99,8 @@ struct EebusTimerObject {
 #define EEBUS_TIMER_START(obj, timeout_ms, autoreload) (EEBUS_TIMER_INTERFACE(obj)->start(obj, timeout_ms, autoreload))
 
 /**
- * @brief EEBUS Timer Stop caller definition
+ * @brief Stop the timer and wait for executing callbacks to return.
+ * @note Call from the timer owner, never from its callback or while holding a lock the callback needs.
  */
 #define EEBUS_TIMER_STOP(obj) (EEBUS_TIMER_INTERFACE(obj)->stop(obj))
 

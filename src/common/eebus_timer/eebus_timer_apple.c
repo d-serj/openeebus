@@ -21,6 +21,7 @@
 #if __APPLE__
 
 #include <dispatch/dispatch.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <time.h>
 
@@ -39,9 +40,10 @@ struct EebusTimer {
   void* ctx;
   dispatch_queue_t queue;
   dispatch_source_t timer_source;
+  dispatch_semaphore_t drained;
   struct timespec start_time;
   uint32_t timeout_ms;
-  EebusTimerState timer_state;
+  atomic_int timer_state;
 };
 
 #define EEBUS_TIMER(obj) ((EebusTimer*)(obj))
@@ -61,6 +63,10 @@ static const EebusTimerInterface eebus_timer_methods = {
 };
 
 static void EebusTimerExpiredCallback(void* context);
+static void TimerCancelled(void* context) {
+  EebusTimer* timer = context;
+  dispatch_semaphore_signal(timer->drained);
+}
 static EebusError EebusTimerConstruct(EebusTimer* self, EebusTimerTimeoutCallback cb, void* ctx);
 
 void EebusTimerExpiredCallback(void* context) {
@@ -77,21 +83,16 @@ EebusError EebusTimerConstruct(EebusTimer* self, EebusTimerTimeoutCallback cb, v
   self->ctx          = ctx;
   self->queue        = NULL;
   self->timer_source = NULL;
-  self->timer_state  = kEebusTimerStateIdle;
+  self->drained      = NULL;
+  atomic_init(&self->timer_state, kEebusTimerStateIdle);
 
   self->queue = dispatch_queue_create("eebus.timer.queue", DISPATCH_QUEUE_SERIAL);
   if (self->queue == NULL) {
     return kEebusErrorInit;
   }
 
-  self->timer_source = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self->queue);
-  if (self->timer_source == NULL) {
-    return kEebusErrorInit;
-  }
-
-  dispatch_set_context(self->timer_source, self);
-  dispatch_source_set_event_handler_f(self->timer_source, EebusTimerExpiredCallback);
-  dispatch_resume(self->timer_source);
+  self->drained = dispatch_semaphore_create(0);
+  if (self->drained == NULL) return kEebusErrorInit;
 
   return kEebusErrorOk;
 }
@@ -114,9 +115,10 @@ EebusTimerObject* EebusTimerCreate(EebusTimerTimeoutCallback cb, void* ctx) {
 void Destruct(EebusTimerObject* self) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
 
-  if (eebus_timer->timer_source != NULL) {
-    dispatch_release(eebus_timer->timer_source);
-    eebus_timer->timer_source = NULL;
+  Stop(self);
+  if (eebus_timer->drained != NULL) {
+    dispatch_release(eebus_timer->drained);
+    eebus_timer->drained = NULL;
   }
 
   if (eebus_timer->queue != NULL) {
@@ -128,13 +130,14 @@ void Destruct(EebusTimerObject* self) {
 void Start(EebusTimerObject* self, uint32_t timeout_ms, bool autoreload) {
   EebusTimer* const eebus_timer = EEBUS_TIMER(self);
 
-  if (eebus_timer->timer_source == NULL) {
-    return;
-  }
-
-  if (timeout_ms == 0) {
-    return;
-  }
+  Stop(self);
+  if (timeout_ms == 0) return;
+  eebus_timer->timer_source = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, eebus_timer->queue);
+  if (eebus_timer->timer_source == NULL) return;
+  dispatch_set_context(eebus_timer->timer_source, eebus_timer);
+  dispatch_source_set_event_handler_f(eebus_timer->timer_source, EebusTimerExpiredCallback);
+  dispatch_source_set_cancel_handler_f(eebus_timer->timer_source, TimerCancelled);
+  dispatch_resume(eebus_timer->timer_source);
 
   // Save start time and timeout
   clock_gettime(CLOCK_MONOTONIC, &eebus_timer->start_time);
@@ -157,6 +160,9 @@ void Stop(EebusTimerObject* self) {
   }
 
   dispatch_source_cancel(eebus_timer->timer_source);
+  dispatch_semaphore_wait(eebus_timer->drained, DISPATCH_TIME_FOREVER);
+  dispatch_release(eebus_timer->timer_source);
+  eebus_timer->timer_source = NULL;
 
   if (eebus_timer->timer_state != kEebusTimerStateExpired) {
     eebus_timer->timer_state = kEebusTimerStateIdle;

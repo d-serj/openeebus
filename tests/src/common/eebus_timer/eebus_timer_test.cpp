@@ -23,6 +23,7 @@
 #define sleep(x) Sleep((x * 1000))
 #endif
 
+#include <chrono>
 #include <string_view>
 
 #include "src/common/eebus_arguments.h"
@@ -76,10 +77,12 @@ TEST_P(EebusTimerTests, EebusTimerTimeoutTest) {
   uint32_t sleep_timeout = GetParam().sleep;
 
   // Act: Start timer and check remaining time and state after a set period
+  const auto started = std::chrono::steady_clock::now();
   EEBUS_TIMER_START(eebus_timer, timer_timeout, false);
   EebusTimerState state_1 = EEBUS_TIMER_GET_TIMER_STATE(eebus_timer);
 
   sleep(sleep_timeout);
+  const auto sampled      = std::chrono::steady_clock::now();
   uint32_t time           = EEBUS_TIMER_GET_REMAINING_TIME(eebus_timer);
   EebusTimerState state_2 = EEBUS_TIMER_GET_TIMER_STATE(eebus_timer);
 
@@ -90,7 +93,9 @@ TEST_P(EebusTimerTests, EebusTimerTimeoutTest) {
   EXPECT_EQ(state_1, GetParam().timer_state_1);
   EXPECT_EQ(state_2, GetParam().timer_state_2);
   EXPECT_EQ(state_3, GetParam().timer_state_3);
-  EXPECT_NEAR(time, GetParam().time, GetParam().tolerance);
+  const auto elapsed                = std::chrono::duration_cast<std::chrono::milliseconds>(sampled - started).count();
+  const uint32_t expected_remaining = elapsed < timer_timeout ? timer_timeout - elapsed : 0;
+  EXPECT_NEAR(time, expected_remaining, GetParam().tolerance);
 }
 
 INSTANTIATE_TEST_SUITE_P(
