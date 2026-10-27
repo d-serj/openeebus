@@ -14,11 +14,11 @@ _SETTLE      = DEFAULT_SETTLE
 
 def _check_failsafe_limit(hp, hems, uc, expected):
     uc_up = uc.upper()
-    pos_hp, pos_hems = hp.line_count(), hems.line_count()
+    pos_hp, pos_hems = hp.mark(), hems.mark()
     hp.send(f"cs_{uc} get failsafe_limit")
     hems.send(f"eg_{uc} get failsafe_limit")
     cs_line = hp.wait_for_new_line(f"CS {uc_up} Failsafe Active Power Limit: value=", pos_hp, _SETTLE)
-    eg_line = hems.wait_for_new_line(f"EG {uc_up} Failsafe Active Power Limit: value=", pos_hems, _SETTLE)
+    eg_line = hems.wait_for_new_line(f"EG {uc_up} Failsafe Active Power Limit: value=", pos_hems, _SETTLE, entity=hems.peer_entity)
     cs = parse_field(cs_line, "value")
     eg = parse_field(eg_line, "value")
     print(f"  failsafe_limit (W): CS={cs}  EG={eg}")
@@ -28,11 +28,11 @@ def _check_failsafe_limit(hp, hems, uc, expected):
 
 def _check_failsafe_duration(hp, hems, uc, expected):
     uc_up = uc.upper()
-    pos_hp, pos_hems = hp.line_count(), hems.line_count()
+    pos_hp, pos_hems = hp.mark(), hems.mark()
     hp.send(f"cs_{uc} get failsafe_duration")
     hems.send(f"eg_{uc} get failsafe_duration")
     cs_line = hp.wait_for_new_line(f"CS {uc_up} Failsafe Duration Minimum:", pos_hp, _SETTLE)
-    eg_line = hems.wait_for_new_line(f"EG {uc_up} Failsafe Duration Minimum:", pos_hems, _SETTLE)
+    eg_line = hems.wait_for_new_line(f"EG {uc_up} Failsafe Duration Minimum:", pos_hems, _SETTLE, entity=hems.peer_entity)
     cs = parse_pt(cs_line)
     eg = parse_pt(eg_line)
     print(f"  failsafe_duration: CS={cs}  EG={eg}")
@@ -42,27 +42,27 @@ def _check_failsafe_duration(hp, hems, uc, expected):
 
 def lp_s1_failsafe_power_limit(hp, hems, uc, limit):
     uc_up = uc.upper()
-    pos_hems = hems.line_count()
+    pos_hems = hems.mark()
     hp.send(f"cs_{uc} set failsafe_limit {limit} true")
-    hems.wait_for_new(f"EG {uc_up} Failsafe Active Power Limit received", pos_hems, _PROPAGATION)
+    assert hems.wait_for_new(f"EG {uc_up} Failsafe Active Power Limit received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected=f"{limit}W")
     _check_failsafe_limit(hp, hems, uc, limit)
 
 
 def lp_s1_failsafe_duration(hp, hems, uc):
     uc_up = uc.upper()
-    pos_hems = hems.line_count()
+    pos_hems = hems.mark()
     hp.send(f"cs_{uc} set failsafe_duration PT2H true")
-    hems.wait_for_new(f"EG {uc_up} Failsafe Duration Minimum received", pos_hems, _PROPAGATION)
+    assert hems.wait_for_new(f"EG {uc_up} Failsafe Duration Minimum received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected="PT2H")
     _check_failsafe_duration(hp, hems, uc, "PT2H")
 
 
 def _check_active_power_limit(hp, hems, uc, value, *, check_duration=False):
     uc_up = uc.upper()
-    pos_hp, pos_hems = hp.line_count(), hems.line_count()
+    pos_hp, pos_hems = hp.mark(), hems.mark()
     hp.send(f"cs_{uc} get power_limit")
     hems.send(f"eg_{uc} get power_limit")
     cs = hp.wait_for_new_line(f"CS {uc_up} Active Power Limit: value=", pos_hp, _SETTLE)
-    eg = hems.wait_for_new_line(f"EG {uc_up} Active Power Limit: value=", pos_hems, _SETTLE)
+    eg = hems.wait_for_new_line(f"EG {uc_up} Active Power Limit: value=", pos_hems, _SETTLE, entity=hems.peer_entity)
     cs_val = parse_field(cs, "value")
     eg_val = parse_field(eg, "value")
     cs_act = parse_field(cs, "is active")  # CS log uses "is active"
@@ -83,42 +83,47 @@ def _check_active_power_limit(hp, hems, uc, value, *, check_duration=False):
 
 def lp_s2_active_power_limit(hp, hems, uc, value):
     uc_up = uc.upper()
-    pos_hp = hp.line_count()
+    pos_hp = hp.mark()
+    pos_hems = hems.mark()
     hems.send(f"eg_{uc} set power_limit {value} PT0S true")
-    hp.wait_for_new(f"CS {uc_up} Power Limit received", pos_hp, _PROPAGATION)
+    assert hp.wait_for_new(f"CS {uc_up} Power Limit received", pos_hp, _PROPAGATION)
+    assert hems.wait_for_new(f"EG {uc_up} Power Limit received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected=f"{value}W")
     _check_active_power_limit(hp, hems, uc, value, check_duration=True)
 
 
 def lp_s3_eg_writes_failsafe_limit(hp, hems, uc):
     uc_up = uc.upper()
-    pos_hp = hp.line_count()
+    pos_hp = hp.mark()
+    pos_hems = hems.mark()
     hems.send(f"eg_{uc} set failsafe_limit 600")
-    hp.wait_for_new(f"CS {uc_up} Failsafe Active Power Limit received", pos_hp, _PROPAGATION)
+    assert hp.wait_for_new(f"CS {uc_up} Failsafe Active Power Limit received", pos_hp, _PROPAGATION)
+    assert hems.wait_for_new(f"EG {uc_up} Failsafe Active Power Limit received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected="600W")
     _check_failsafe_limit(hp, hems, uc, 600)
 
 
 def lp_s3_eg_writes_failsafe_duration(hp, hems, uc):
     uc_up = uc.upper()
-    pos_hp = hp.line_count()
+    pos_hp = hp.mark()
+    pos_hems = hems.mark()
     hems.send(f"eg_{uc} set failsafe_duration PT3H")
-    hp.wait_for_new(f"CS {uc_up} Failsafe Duration Minimum received", pos_hp, _PROPAGATION)
+    assert hp.wait_for_new(f"CS {uc_up} Failsafe Duration Minimum received", pos_hp, _PROPAGATION)
+    assert hems.wait_for_new(f"EG {uc_up} Failsafe Duration Minimum received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected="PT3H")
     _check_failsafe_duration(hp, hems, uc, "PT3H")
 
 
 def lp_s4_nominal_max(hp, hems, uc, value):
     uc_up = uc.upper()
-    pos_hems = hems.line_count()
+    pos_hems = hems.mark()
     hp.send(f"cs_{uc} set nominal_max {value}")
-    hems.wait_for_new(f"EG {uc_up} Power Nominal Max received", pos_hems, _PROPAGATION)
-
-    pos_hp, pos_hems = hp.line_count(), hems.line_count()
+    assert hems.wait_for_new(f"EG {uc_up} Power Nominal Max received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected=f"{value}W")
+    pos_hp, pos_hems = hp.mark(), hems.mark()
     hp.send(f"cs_{uc} get nominal_max")
     hems.send(f"eg_{uc} get power_nominal_max")
     cs_line = hp.wait_for_new_line(
         f"CS {uc_up} Nominal Max: value=", pos_hp, _SETTLE
     )
     eg_line = hems.wait_for_new_line(
-        f"EG {uc_up} Power Nominal Max: value=", pos_hems, _SETTLE
+        f"EG {uc_up} Power Nominal Max: value=", pos_hems, _SETTLE, entity=hems.peer_entity
     )
     cs = parse_field(cs_line, "value")
     eg = parse_field(eg_line, "value")
@@ -129,7 +134,7 @@ def lp_s4_nominal_max(hp, hems, uc, value):
 
 def lp_s5_cs_announces_active_limit(hp, hems, uc, value):
     uc_up = uc.upper()
-    pos_hems = hems.line_count()
+    pos_hems = hems.mark()
     hp.send(f"cs_{uc} set power_limit {value} true true")
-    hems.wait_for_new(f"EG {uc_up} Power Limit received", pos_hems, _PROPAGATION)
+    assert hems.wait_for_new(f"EG {uc_up} Power Limit received", pos_hems, _PROPAGATION, entity=hems.peer_entity, expected=f"{value}W")
     _check_active_power_limit(hp, hems, uc, value)

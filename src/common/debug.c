@@ -22,12 +22,15 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <time.h>
+
+#include "src/common/output_record.h"
 #ifdef _WIN32
 #include <sys/timeb.h>
 #include <windows.h>
 #endif
 
 void DebugPrintf(const char* format, ...) {
+  OutputRecordBegin();
   // TODO: Add platform independent timestamp printing
   char timestamp_buf[50] = "";
   lwsl_timestamp(LLL_NOTICE, timestamp_buf, sizeof(timestamp_buf));
@@ -37,6 +40,7 @@ void DebugPrintf(const char* format, ...) {
   va_start(args, format);
   vprintf(format, args);
   va_end(args);
+  OutputRecordEnd();
 }
 
 void DebugHexdump(void* data, size_t data_size) {

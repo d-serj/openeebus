@@ -41,6 +41,7 @@ set(ITEST_PORT_BASE 4710 CACHE STRING "First HEMS port for CTest integration tes
 set(ITEST_INDEX 0)
 # The list of integration tests to be executed. Add or remove test names as needed.
 set(ITEST_LIST
+  records
   lpc
   lpp
   mpc
@@ -85,6 +86,7 @@ foreach(ITEST_NAME ${ITEST_LIST})
     "EEBUS_HP_PORT=${ITEST_HP_PORT}"
     "EEBUS_EV_PORT=${ITEST_EV_PORT}"
     "EEBUS_INTEGRATION_INSTANCE=${ITEST_NAME}"
+    "EEBUS_INTEGRATION_BUILD_DIR=${CMAKE_BINARY_DIR}"
   )
 
   set_tests_properties(integration_${ITEST_NAME} PROPERTIES

@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_ma_mpc.h"
 #include "src/cli/eebus_cli_remote_arg.h"
@@ -142,8 +144,11 @@ static void HandleCmdMaMpcGet(
     return;
   }
 
+  OutputRecordBegin();
   printf("MA MPC measurement %s: ", name);
-  ScaledValuePrint("value=%s\n", &value);
+  ScaledValuePrint("value=%s", &value);
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
 }
 
 static void HandleCmd(const EebusCliHandlerObject* self, const char* const* tokens, size_t num_tokens) {

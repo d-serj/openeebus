@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_gcp_mgcp.h"
 #include "src/use_case/actor/gcp/mgcp/gcp_mgcp.h"
@@ -155,8 +157,10 @@ static void HandleCmdGet(const GcpMgcpCli* self, const char* const* tokens, size
       return;
     }
 
+    OutputRecordBegin();
     printf("GCP MGCP pv_curtailment_limit_factor: ");
     ScaledValuePrint("value=%s\n", &value);
+    OutputRecordEnd();
     return;
   }
 
@@ -172,8 +176,10 @@ static void HandleCmdGet(const GcpMgcpCli* self, const char* const* tokens, size
     return;
   }
 
+  OutputRecordBegin();
   printf("GCP MGCP measurement %s: ", name);
   ScaledValuePrint("value=%s\n", &value);
+  OutputRecordEnd();
 }
 
 static void HandleCmd(const EebusCliHandlerObject* self, const char* const* tokens, size_t num_tokens) {

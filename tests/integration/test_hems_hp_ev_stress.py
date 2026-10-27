@@ -10,6 +10,7 @@ MA MPC remote list — allowing unambiguous entity targeting.
 
 import os
 import random
+from _records import record_entity
 import time
 from contextlib import ExitStack
 
@@ -20,11 +21,11 @@ from conftest import (
     HP_BINARY, HP_PORT,
     HEMS_BINARY, HEMS_PORT,
     EV_BINARY, EV_PORT,
-    SHIP_CONNECTED_MARKER,
+    SHIP_CONNECTED_MARKER, UC_READY_TIMEOUT,
     DEFAULT_PROPAGATION,
     parse_field, require_binaries,
 )
-from _ev_tests import wait_for_entity_addresses
+from _ev_tests import wait_for_entity_addresses, identify_mpc_sender, wait_for_peer_readiness
 
 TOTAL             = int(os.environ.get("STRESS_TOTAL", 20))
 CONNECT_TIMEOUT   = 90.0
@@ -68,16 +69,17 @@ def test_hems_hp_ev_stress(test_identities):
             ))
             connected_ev = connected_pair and (
                 ev.wait_for(SHIP_CONNECTED_MARKER, CONNECT_TIMEOUT) and
-                hems.wait_for_count(SHIP_CONNECTED_MARKER, 2, CONNECT_TIMEOUT)
+                hems.wait_for(SHIP_CONNECTED_MARKER + ": " + test_identities.ev_charger.ski, CONNECT_TIMEOUT)
             )
             elapsed = time.monotonic() - t_start
 
             if not connected_ev:
                 fail_reason = "connection-timeout"
-            elif not hems.wait_for_count(_MPC_READY_MARKER, 2, ENTITY_TIMEOUT):
+            elif not wait_for_peer_readiness(hems, _MPC_READY_MARKER, (test_identities.heat_pump.ski, test_identities.ev_charger.ski), ENTITY_TIMEOUT):
                 fail_reason = "entity-list-timeout"
             else:
-                addrs = wait_for_entity_addresses(hems, 2, ENTITY_TIMEOUT)
+                addrs = (identify_mpc_sender(hp, hems, 990001, DEFAULT_PROPAGATION),
+                         identify_mpc_sender(ev, hems, 990002, DEFAULT_PROPAGATION))
                 if len(addrs) < 2:
                     fail_reason = "entity-list-timeout"
                 else:
@@ -106,43 +108,42 @@ def test_hems_hp_ev_stress(test_identities):
 def _run_data_check(hp, hems, ev, hp_entity, ev_entity) -> str:
     """Return empty string on success, or a short failure description."""
     # MPC: HP sets 1000, EV sets 2000
-    pos = hems.line_count()
+    pos = hems.mark()
     hp.send("mu_mpc set power_total 1000")
-    hems.wait_for_new("MA MPC Measurement received: power_total", pos, DEFAULT_PROPAGATION)
-
-    pos = hems.line_count()
+    assert hems.wait_for_new("MA MPC Measurement received: power_total = 1000,", pos, DEFAULT_PROPAGATION, entity=hp_entity)
+    pos = hems.mark()
     ev.send("mu_mpc set power_total 2000")
-    hems.wait_for_new("MA MPC Measurement received: power_total", pos, DEFAULT_PROPAGATION)
-
-    time.sleep(0.2)
-    pos_hems = hems.line_count()
+    assert hems.wait_for_new("MA MPC Measurement received: power_total = 2000,", pos, DEFAULT_PROPAGATION, entity=ev_entity)
+    pos_hems = hems.mark()
     hems.send(f"ma_mpc get power_total --remote {hp_entity}")
     hems.send(f"ma_mpc get power_total --remote {ev_entity}")
 
     deadline = time.monotonic() + DEFAULT_PROPAGATION
     while time.monotonic() < deadline:
-        lines = [l for l in hems.log_lines()[pos_hems:] if "MA MPC measurement power_total:" in l]
+        lines = [l for l in hems.records_since(pos_hems) if "MA MPC measurement power_total:" in l]
         if len(lines) >= 2:
             break
         time.sleep(0.1)
 
-    lines = [l for l in hems.log_lines()[pos_hems:] if "MA MPC measurement power_total:" in l]
-    hp_val = parse_field(lines[0], "value") if len(lines) >= 1 else None
-    ev_val = parse_field(lines[1], "value") if len(lines) >= 2 else None
+    lines = [l for l in hems.records_since(pos_hems) if "MA MPC measurement power_total:" in l]
+    hp_val = parse_field(next((line for line in lines if record_entity(line) == hp_entity), ""), "value")
+    ev_val = parse_field(next((line for line in lines if record_entity(line) == ev_entity), ""), "value")
 
     if hp_val != "1000" or ev_val != "2000":
         return f"MA-mpc-values={hp_val!r}/{ev_val!r}"
 
+    hems.wait_for_new_line("EG LPC Failsafe Active Power Limit received", 0, UC_READY_TIMEOUT, entity=hp_entity)
+
     # LPC: HEMS sends 5000 W limit to HP only
-    pos_hp = hp.line_count()
+    pos_hp = hp.mark()
     hems.send(f"eg_lpc set power_limit 5000 PT0S true --remote {hp_entity}")
     if not hp.wait_for_new("CS LPC Power Limit received", pos_hp, DEFAULT_PROPAGATION):
         return "LPC-timeout"
 
-    pos_hp2 = hp.line_count()
+    pos_hp2 = hp.mark()
     hp.send("cs_lpc get power_limit")
-    hp.wait_for_new("CS LPC Active Power Limit: value", pos_hp2, DEFAULT_PROPAGATION)
-    cs_lines = [l for l in hp.log_lines()[pos_hp2:]
+    assert hp.wait_for_new("CS LPC Active Power Limit: value", pos_hp2, DEFAULT_PROPAGATION)
+    cs_lines = [l for l in hp.records_since(pos_hp2)
                 if "CS LPC Active Power Limit" in l and "Failsafe" not in l]
     cs_val = parse_field(cs_lines[-1], "value") if cs_lines else None
     if cs_val != "5000":

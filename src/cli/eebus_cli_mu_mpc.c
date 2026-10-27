@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_mu_mpc.h"
 #include "src/common/eebus_arguments.h"
@@ -135,8 +137,10 @@ void HandleCmdGet(const MuMpcCli* self, const char* const* tokens, size_t num_to
     return;
   }
 
+  OutputRecordBegin();
   printf("MU MPC measurement %s: ", name);
   ScaledValuePrint("value=%s\n", &value);
+  OutputRecordEnd();
 }
 
 void HandleCmd(const EebusCliHandlerObject* self, const char* const* tokens, size_t num_tokens) {

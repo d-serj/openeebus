@@ -189,6 +189,7 @@ set(HEADERS
   src/common/api/eebus_timer_interface.h
   src/common/array_util.h
   src/common/debug.h
+  src/common/output_record.h
   src/common/eebus_device_info.h
   src/common/eebus_assert.h
   src/common/eebus_timer/eebus_timer.h

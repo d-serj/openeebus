@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_cs_lp.h"
 #include "src/common/eebus_arguments.h"
@@ -123,10 +125,12 @@ void HandleCmdGetPowerLimit(const CsLpCli* self, const char* const* tokens, size
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
   ScaledValuePrint("Active Power Limit: value=%s, ", &limit.value);
   EebusDurationPrint("duration=%s, ", &limit.duration);
   printf("is active=%s\n", EebusBoolToString(limit.is_active));
+  OutputRecordEnd();
 }
 
 void HandleCmdGetFailsafeLimit(const CsLpCli* self, const char* const* tokens, size_t num_tokens) {
@@ -140,9 +144,11 @@ void HandleCmdGetFailsafeLimit(const CsLpCli* self, const char* const* tokens, s
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
   ScaledValuePrint("Failsafe Active Power Limit: value=%s, ", &power_limit);
   printf("is changeable=%s\n", EebusBoolToString(is_changeable));
+  OutputRecordEnd();
 }
 
 void HandleCmdGetFailsafeDuration(const CsLpCli* self, const char* const* tokens, size_t num_tokens) {
@@ -156,9 +162,11 @@ void HandleCmdGetFailsafeDuration(const CsLpCli* self, const char* const* tokens
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
   EebusDurationPrint("Failsafe Duration Minimum: %s, ", &duration);
   printf("is changeable=%s\n", EebusBoolToString(is_changeable));
+  OutputRecordEnd();
 }
 
 void HandleCmdGetNominalMax(const CsLpCli* self, const char* const* tokens, size_t num_tokens) {
@@ -171,8 +179,10 @@ void HandleCmdGetNominalMax(const CsLpCli* self, const char* const* tokens, size
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
   ScaledValuePrint("Nominal Max: value=%s\n", &nominal_max);
+  OutputRecordEnd();
 }
 
 void HandleCmdGet(const CsLpCli* self, const char* const* tokens, size_t num_tokens) {

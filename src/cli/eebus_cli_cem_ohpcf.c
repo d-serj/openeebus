@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_cem_ohpcf.h"
 #include "src/cli/eebus_cli_handler_interface.h"
@@ -198,8 +200,10 @@ void OnScheduleResult(
   }
 
   if (*result_data->error_number != kErrorNumberTypeNoError) {
+    OutputRecordBegin();
     printf("CEM OHPCF schedule optional power consumption result error: %u from ", *result_data->error_number);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
   }
 }
 
@@ -247,14 +251,18 @@ void OnWriteCommandResult(
   const ResultDataType* const result_data = result_msg->result_data;
 
   if ((result_data == NULL) || (result_data->error_number == NULL)) {
+    OutputRecordBegin();
     printf("CEM OHPCF %s command result missing from ", command_str);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
     return;
   }
 
   if (*result_data->error_number != kErrorNumberTypeNoError) {
+    OutputRecordBegin();
     printf("CEM OHPCF %s command result error: %u from ", command_str, *result_data->error_number);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
   }
 }
 

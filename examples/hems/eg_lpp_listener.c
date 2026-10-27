@@ -22,10 +22,13 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "src/common/output_record.h"
+
 #include "examples/hems/eg_lpp_listener.h"
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_date_time/eebus_date_time.h"
 #include "src/common/eebus_malloc.h"
+#include "src/common/string_util.h"
 #include "src/use_case/api/eg_lp_listener_interface.h"
 
 typedef struct EgLppListener EgLppListener;
@@ -120,12 +123,16 @@ void OnPowerLimitReceive(
     const EebusDuration* duration,
     bool is_active
 ) {
-  UNUSED(self);
-  UNUSED(entity_addr);
+  char* ski = HemsCopyRemoteSki(EG_LP_LISTENER(self)->hems, entity_addr);
 
+  OutputRecordBegin();
   ScaledValuePrint("EG LPP Power Limit received %sW, ", power_limit);
   EebusDurationPrint("duration = %s, ", duration);
-  printf("active = %s\n", is_active ? "true" : "false");
+  printf("active = %s", is_active ? "true" : "false");
+  printf(" ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }
 
 void OnFailsafePowerLimitReceive(
@@ -133,10 +140,14 @@ void OnFailsafePowerLimitReceive(
     const EntityAddressType* entity_addr,
     const ScaledValue* power_limit
 ) {
-  UNUSED(self);
-  UNUSED(entity_addr);
+  char* ski = HemsCopyRemoteSki(EG_LP_LISTENER(self)->hems, entity_addr);
 
-  ScaledValuePrint("EG LPP Failsafe Active Power Limit received:  %sW\n", power_limit);
+  OutputRecordBegin();
+  ScaledValuePrint("EG LPP Failsafe Active Power Limit received:  %sW", power_limit);
+  printf(" ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }
 
 void OnFailsafeDurationReceive(
@@ -144,17 +155,25 @@ void OnFailsafeDurationReceive(
     const EntityAddressType* entity_addr,
     const DurationType* duration
 ) {
-  UNUSED(self);
-  UNUSED(entity_addr);
+  char* ski = HemsCopyRemoteSki(EG_LP_LISTENER(self)->hems, entity_addr);
 
-  EebusDurationPrint("EG LPP Failsafe Duration Minimum received: %s\n", duration);
+  OutputRecordBegin();
+  EebusDurationPrint("EG LPP Failsafe Duration Minimum received: %s", duration);
+  printf(" ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }
 
 void OnHeartbeatReceive(EgLpListenerObject* self, const EntityAddressType* entity_addr, uint64_t heartbeat_counter) {
-  UNUSED(self);
-  UNUSED(entity_addr);
+  char* ski = HemsCopyRemoteSki(EG_LP_LISTENER(self)->hems, entity_addr);
 
-  printf("EG LPP Heartbeat received, counter = %" PRIu64 "\n", heartbeat_counter);
+  OutputRecordBegin();
+  printf("EG LPP Heartbeat received, counter = %" PRIu64 "", heartbeat_counter);
+  printf(" ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }
 
 void OnPowerNominalMaxReceive(
@@ -162,8 +181,12 @@ void OnPowerNominalMaxReceive(
     const EntityAddressType* entity_addr,
     const ScaledValue* power_limit
 ) {
-  UNUSED(self);
-  UNUSED(entity_addr);
+  char* ski = HemsCopyRemoteSki(EG_LP_LISTENER(self)->hems, entity_addr);
 
-  ScaledValuePrint("EG LPP Power Nominal Max received: %sW\n", power_limit);
+  OutputRecordBegin();
+  ScaledValuePrint("EG LPP Power Nominal Max received: %sW", power_limit);
+  printf(" ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }

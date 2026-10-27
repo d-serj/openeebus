@@ -62,6 +62,12 @@ static inline void HemsClose(HemsObject* hpsrv) {
 void HemsRegisterRemoteSki(HemsObject* self, const char* ski);
 
 /**
+ * @brief Copy the authenticated SKI associated with a remote entity.
+ * @return Owned string to release with StringDelete(), or NULL if the peer is unavailable.
+ */
+char* HemsCopyRemoteSki(HemsObject* self, const EntityAddressType* entity_addr);
+
+/**
  * @brief Unregister remote SKI from the EEBUS Home Energy Management System Service instance
  * @param self HEMS instance to unregister the remote SKI for
  * @param ski Remote SKI to be unregistered

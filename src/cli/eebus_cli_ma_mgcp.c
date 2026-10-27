@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_ma_mgcp.h"
 #include "src/cli/eebus_cli_remote_arg.h"
@@ -135,8 +137,11 @@ static void HandleCmdGet(
       return;
     }
 
+    OutputRecordBegin();
     printf("MA MGCP pv_curtailment_limit_factor: ");
-    ScaledValuePrint("value=%s\n", &value);
+    ScaledValuePrint("value=%s", &value);
+    EntityAddressPrint(" from entity: %s\n", entity_addr);
+    OutputRecordEnd();
     return;
   }
 
@@ -152,8 +157,11 @@ static void HandleCmdGet(
     return;
   }
 
+  OutputRecordBegin();
   printf("MA MGCP measurement %s: ", name);
-  ScaledValuePrint("value=%s\n", &value);
+  ScaledValuePrint("value=%s", &value);
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
 }
 
 static void HandleCmd(const EebusCliHandlerObject* self, const char* const* tokens, size_t num_tokens) {

@@ -36,8 +36,10 @@
 #include "examples/hems/ma_mpc_listener.h"
 #include "src/cli/eebus_cli.h"
 #include "src/common/eebus_arguments.h"
+#include "src/common/string_util.h"
 #include "src/service/api/service_reader_interface.h"
 #include "src/service/service/eebus_service.h"
+#include "src/spine/api/device_remote_interface.h"
 #include "src/spine/entity/entity_local.h"
 #include "src/use_case/actor/cem/ohpcf/cem_ohpcf.h"
 #include "src/use_case/actor/eg/lpc/eg_lpc.h"
@@ -553,4 +555,14 @@ void HemsHandleCmd(HemsObject* self, char* cmd) {
   Hems* const hems = HEMS(self);
 
   EEBUS_CLI_HANDLE_CMD(hems->cli, cmd);
+}
+
+char* HemsCopyRemoteSki(HemsObject* self, const EntityAddressType* entity_addr) {
+  if (self == NULL || entity_addr == NULL || entity_addr->device == NULL) return NULL;
+  DeviceLocalObject* local = EEBUS_SERVICE_GET_LOCAL_DEVICE(HEMS(self)->service);
+  DEVICE_LOCAL_LOCK(local);
+  DeviceRemoteObject* remote = DEVICE_LOCAL_GET_REMOTE_DEVICE_WITH_ADDRESS(local, entity_addr->device);
+  char* ski                  = remote != NULL ? StringCopy(DEVICE_REMOTE_GET_SKI(remote)) : NULL;
+  DEVICE_LOCAL_UNLOCK(local);
+  return ski;
 }

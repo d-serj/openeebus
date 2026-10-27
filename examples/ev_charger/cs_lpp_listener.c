@@ -22,6 +22,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "src/common/output_record.h"
+
 #include "examples/ev_charger/cs_lpp_listener.h"
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_date_time/eebus_date_time.h"
@@ -106,9 +108,11 @@ void OnPowerLimitReceive(
   UNUSED(self);
 
   // V2G production limit — this basic EV charger does not support V2G
+  OutputRecordBegin();
   ScaledValuePrint("EV CS LPP: Production limit received %sW (V2G not supported), ", power_limit);
   EebusDurationPrint("duration = %s, ", duration);
   printf("active = %s\n", is_active ? "true" : "false");
+  OutputRecordEnd();
 }
 
 void OnFailsafePowerLimitReceive(CsLpListenerObject* self, const ScaledValue* power_limit) {

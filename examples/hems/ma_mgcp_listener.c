@@ -20,10 +20,13 @@
 
 #include <stdio.h>
 
+#include "src/common/output_record.h"
+
 #include "examples/hems/hems.h"
 #include "examples/hems/ma_mgcp_listener.h"
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_malloc.h"
+#include "src/common/string_util.h"
 #include "src/use_case/api/ma_mgcp_listener_interface.h"
 #include "src/use_case/model/mgcp_types.h"
 #include "src/use_case/model/scaled_value.h"
@@ -97,8 +100,13 @@ void Destruct(MaMgcpListenerObject* self) {
 void OnRemoteEntityConnect(MaMgcpListenerObject* self, const EntityAddressType* entity_addr) {
   MaMgcpListener* const ma_mgcp_listener = MA_MGCP_LISTENER(self);
 
-  printf("MA MGCP remote entity connected\n");
   HemsSetMaMgcpRemoteEntity(ma_mgcp_listener->hems, entity_addr);
+  char* ski = HemsCopyRemoteSki(ma_mgcp_listener->hems, entity_addr);
+  OutputRecordBegin();
+  printf("MA MGCP remote entity connected ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }
 
 void OnRemoteEntityDisconnect(MaMgcpListenerObject* self, const EntityAddressType* entity_addr) {
@@ -121,9 +129,11 @@ void OnMeasurementReceive(
     return;
   }
 
+  OutputRecordBegin();
   printf("MA MGCP Measurement received: %s = ", name);
   ScaledValuePrint("%s,", measurement_value);
   EntityAddressPrint(" from entity: %s\n", remote_entity_addr);
+  OutputRecordEnd();
 }
 
 void OnPvCurtailmentLimitFactorReceive(
@@ -133,7 +143,9 @@ void OnPvCurtailmentLimitFactorReceive(
 ) {
   UNUSED(self);
 
+  OutputRecordBegin();
   printf("MA MGCP PV curtailment limit factor received: ");
   ScaledValuePrint("%s,", value);
   EntityAddressPrint(" from entity: %s\n", remote_entity_addr);
+  OutputRecordEnd();
 }

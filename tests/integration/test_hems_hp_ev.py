@@ -14,6 +14,7 @@ Scenarios:
 """
 
 from contextlib import ExitStack
+from _records import record_entity
 
 import pytest
 
@@ -26,7 +27,7 @@ from conftest import (
     DEFAULT_PROPAGATION, DEFAULT_SETTLE,
     parse_field, require_binaries,
 )
-from _ev_tests import wait_for_entity_addresses
+from _ev_tests import wait_for_entity_addresses, identify_mpc_sender, wait_for_peer_readiness
 
 _MPC_READY_MARKER = "MA MPC remote entity connected"
 _LPC_READY_MARKER = "EG LPC Failsafe Active Power Limit received"
@@ -37,8 +38,7 @@ _ENTITY_TIMEOUT   = 30.0
 def nodes_three(test_identities):
     """Start HP+HEMS, wait for first SHIP connection, then start EV.
 
-    Sequential startup guarantees HP registers first in HEMS's MPC remote
-    list, so entity[0] is always HP and entity[1] is always EV.
+    Readiness and fresh measurements identify each peer independently of entity-list order.
     """
     require_binaries(EV_BINARY)
     with ExitStack() as stack:
@@ -58,28 +58,28 @@ def nodes_three(test_identities):
             test_identities.ev_charger.certificate, test_identities.ev_charger.key,
         ))
         assert ev.wait_for(SHIP_CONNECTED_MARKER, NODES_CONNECT_TIMEOUT), "EV: SHIP connection timeout"
-        assert hems.wait_for_count(SHIP_CONNECTED_MARKER, 2, NODES_CONNECT_TIMEOUT), "HEMS: second SHIP connection timeout"
+        assert hems.wait_for(SHIP_CONNECTED_MARKER + ": " + test_identities.ev_charger.ski, NODES_CONNECT_TIMEOUT), "HEMS: second SHIP connection timeout"
         yield hp, hems, ev
 
 
 @pytest.fixture(scope="module")
-def nodes_hems_hp_ev(nodes_three):
+def nodes_hems_hp_ev(nodes_three, entity_addrs, test_identities):
     """Extend nodes_three: wait for both MPC use cases and LPC to be ready."""
     hp, hems, ev = nodes_three
-    assert hems.wait_for_count(_MPC_READY_MARKER, 2, UC_READY_TIMEOUT), \
+    assert wait_for_peer_readiness(hems, _MPC_READY_MARKER, (test_identities.heat_pump.ski, test_identities.ev_charger.ski), UC_READY_TIMEOUT), \
         f"HEMS MPC not ready for both remotes after {UC_READY_TIMEOUT:.0f}s"
-    assert hems.wait_for(_LPC_READY_MARKER, UC_READY_TIMEOUT), \
-        f"HEMS LPC not ready after {UC_READY_TIMEOUT:.0f}s"
+    for entity in entity_addrs:
+        hems.wait_for_new_line(_LPC_READY_MARKER, 0, UC_READY_TIMEOUT, entity=entity)
     return hp, hems, ev
 
 
 @pytest.fixture(scope="module")
-def entity_addrs(nodes_hems_hp_ev):
-    """Return (hp_entity, ev_entity) address strings; HP started first → addrs[0]."""
-    hp, hems, ev = nodes_hems_hp_ev
-    addrs = wait_for_entity_addresses(hems, 2, _ENTITY_TIMEOUT)
-    assert len(addrs) == 2, f"Expected 2 remote entities, got {len(addrs)}: {addrs}"
-    return addrs[0], addrs[1]
+def entity_addrs(nodes_three, test_identities):
+    """Identify the HP and EV entities from their own fresh measurements."""
+    hp, hems, ev = nodes_three
+    assert wait_for_peer_readiness(hems, _MPC_READY_MARKER, (test_identities.heat_pump.ski, test_identities.ev_charger.ski), UC_READY_TIMEOUT)
+    return (identify_mpc_sender(hp, hems, 990001, DEFAULT_PROPAGATION),
+            identify_mpc_sender(ev, hems, 990002, DEFAULT_PROPAGATION))
 
 
 # ---------------------------------------------------------------------------
@@ -127,10 +127,12 @@ def test_hems_hp_ev_s3_lpc_to_hp(nodes_hems_hp_ev, entity_addrs):
 # Scenario 4 — EV disconnects; HP+HEMS LPC continue unaffected
 # ---------------------------------------------------------------------------
 
-def test_hems_hp_ev_s4_ev_disconnect_lpc(nodes_hems_hp_ev, entity_addrs):
+def test_hems_hp_ev_s4_ev_disconnect_lpc(nodes_hems_hp_ev, entity_addrs, test_identities):
     hp, hems, ev = nodes_hems_hp_ev
     hp_entity, _ = entity_addrs
+    position = hems.mark()
     ev.stop()
+    assert hems.wait_for_new(f"Remote SKI disconnected: {test_identities.ev_charger.ski}", position, DEFAULT_PROPAGATION)
     _verify_lpc_from_hems(hp, hems, hp_entity, 7000)
 
 
@@ -141,24 +143,22 @@ def test_hems_hp_ev_s4_ev_disconnect_lpc(nodes_hems_hp_ev, entity_addrs):
 def _verify_mpc_from_sender(sender, hems, entity_addr, measurements):
     """Set MPC measurements on sender, verify both MU and MA sides."""
     for name, value in measurements:
-        pos = hems.line_count()
+        pos = hems.mark()
         sender.send(f"mu_mpc set {name} {value}")
-        hems.wait_for_new(f"MA MPC Measurement received: {name}", pos, DEFAULT_PROPAGATION)
-
-    pos_sender = sender.line_count()
+        assert hems.wait_for_new(f"MA MPC Measurement received: {name}", pos, DEFAULT_PROPAGATION, entity=entity_addr)
+    pos_sender = sender.mark()
     for name, _ in measurements:
         sender.send(f"mu_mpc get {name}")
-    pos_hems = hems.line_count()
+    pos_hems = hems.mark()
     for name, _ in measurements:
         hems.send(f"ma_mpc get {name} --remote {entity_addr}")
 
     last_name = measurements[-1][0]
-    sender.wait_for_new(f"MU MPC measurement {last_name}:", pos_sender, DEFAULT_SETTLE)
-    hems.wait_for_new(f"MA MPC measurement {last_name}:", pos_hems, DEFAULT_SETTLE)
-
+    assert sender.wait_for_new(f"MU MPC measurement {last_name}:", pos_sender, DEFAULT_SETTLE)
+    assert hems.wait_for_new(f"MA MPC measurement {last_name}:", pos_hems, DEFAULT_SETTLE)
     for name, expected in measurements:
-        mu_lines = [l for l in sender.log_lines()[pos_sender:] if f"MU MPC measurement {name}:" in l]
-        ma_lines = [l for l in hems.log_lines()[pos_hems:] if f"MA MPC measurement {name}:" in l]
+        mu_lines = [l for l in sender.records_since(pos_sender) if f"MU MPC measurement {name}:" in l]
+        ma_lines = [l for l in hems.records_since(pos_hems) if f"MA MPC measurement {name}:" in l and record_entity(l) == entity_addr]
         mu_val = parse_field(mu_lines[-1], "value") if mu_lines else None
         ma_val = parse_field(ma_lines[-1], "value") if ma_lines else None
         print(f"  {name}: MU={mu_val}  MA={ma_val}")
@@ -168,14 +168,14 @@ def _verify_mpc_from_sender(sender, hems, entity_addr, measurements):
 
 def _verify_lpc_from_hems(hp, hems, hp_entity, limit):
     """Have HEMS send an LPC power limit to HP via --remote and verify HP CS side."""
-    pos_hp = hp.line_count()
+    pos_hp = hp.mark()
     hems.send(f"eg_lpc set power_limit {limit} PT0S true --remote {hp_entity}")
     assert hp.wait_for_new("CS LPC Power Limit received", pos_hp, DEFAULT_PROPAGATION), \
         f"HP did not receive LPC power limit {limit} W"
-    pos_hp2 = hp.line_count()
+    pos_hp2 = hp.mark()
     hp.send("cs_lpc get power_limit")
-    hp.wait_for_new("CS LPC Active Power Limit: value", pos_hp2, DEFAULT_SETTLE)
-    cs_lines = [l for l in hp.log_lines()[pos_hp2:]
+    assert hp.wait_for_new("CS LPC Active Power Limit: value", pos_hp2, DEFAULT_SETTLE)
+    cs_lines = [l for l in hp.records_since(pos_hp2)
                 if "CS LPC Active Power Limit" in l and "Failsafe" not in l]
     cs_val = parse_field(cs_lines[-1], "value") if cs_lines else None
     print(f"  LPC power_limit: CS={cs_val}")

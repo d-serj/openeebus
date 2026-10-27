@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 from pytest_html import extras as html_extras
 
+from _records import records_since, matches, record_entity
+
 from _certificates import TestIdentities, generate_test_identities
 
 ROOT      = Path(__file__).parent.parent.parent
-BUILD_DIR = ROOT / "build"
+BUILD_DIR = Path(os.environ.get("EEBUS_INTEGRATION_BUILD_DIR", ROOT / "build"))
 
 HP_BINARY   = str(BUILD_DIR / "heat_pump")
 HEMS_BINARY = str(BUILD_DIR / "hems")
@@ -56,16 +58,21 @@ class NodeProcess:
             mdns_service_name = f"openeebus-{_INSTANCE}-{node_name}"
         fd, self.log_path = tempfile.mkstemp(suffix=".log")
         self._log_fd = os.fdopen(fd, "w")
+        self.stderr_path = self.log_path + ".stderr"
+        self._stderr_fd = open(self.stderr_path, "w")
+        self.expected_exit = 0
+        self.remote_ski = remote_ski
         try:
             self.proc = subprocess.Popen(
                 _cmd(binary, port, remote_ski, cert, key, extra_args),
                 stdin=subprocess.PIPE,
                 stdout=self._log_fd,
-                stderr=self._log_fd,
+                stderr=self._stderr_fd,
                 env={**os.environ, "EEBUS_MDNS_SERVICE_NAME": mdns_service_name} if mdns_service_name else None,
             )
         except BaseException:
             self._log_fd.close()
+            self._stderr_fd.close()
             os.unlink(self.log_path)
             raise
 
@@ -79,40 +86,42 @@ class NodeProcess:
         self.proc.stdin.write(f"{cmd}\n".encode())
         self.proc.stdin.flush()
 
+    def mark(self) -> int:
+        return os.path.getsize(self.log_path)
+
+    def records_since(self, after: int) -> list:
+        return records_since(self.log_path, after)
+
     def wait_for(self, marker: str, timeout: float = 120) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            with open(self.log_path) as f:
-                if marker in f.read():
-                    return True
-            time.sleep(0.1)
-        return False
+        return self.wait_for_new(marker, 0, timeout)
 
     def line_count(self) -> int:
         return len(self.log_lines())
 
-    def wait_for_new(self, marker: str, after: int, timeout: float) -> bool:
-        """Return True once marker appears in any log line at index >= after."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if any(marker in ln for ln in self.log_lines()[after:]):
-                return True
-            time.sleep(0.1)
-        return False
+    def wait_for_new(self, marker: str, after: int, timeout: float,
+                     *, entity=None, expected=None, peer_ski=None) -> bool:
+        try:
+            self.wait_for_new_line(marker, after, timeout, entity=entity, expected=expected, peer_ski=peer_ski)
+            return True
+        except TimeoutError:
+            return False
 
-    def wait_for_new_line(self, marker: str, after: int, timeout: float) -> str:
-        """Return the first matching log line at index >= after, or time out."""
+    def wait_for_new_line(self, marker: str, after: int, timeout: float,
+                          *, entity=None, expected=None, peer_ski=None) -> str:
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for line in self.log_lines()[after:]:
-                if marker in line:
+        while True:
+            for line in self.records_since(after):
+                if matches(line, marker, entity, expected, peer_ski):
                     return line.rstrip()
-            time.sleep(0.1)
-        raise TimeoutError(f"No new log line containing {marker!r}")
+            status = self.proc.poll()
+            if status is not None:
+                raise AssertionError(f"Process exited {status} waiting for {marker!r}; log={self.log_path}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"No complete new record containing {marker!r}; log={self.log_path}")
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
 
     def log_lines(self) -> list:
-        with open(self.log_path) as f:
-            return f.readlines()
+        return self.records_since(0)
 
     def last_line_with(self, text: str, exclude: str = None) -> str:
         for line in reversed(self.log_lines()):
@@ -153,12 +162,17 @@ class NodeProcess:
             self.proc.stdin.close()
         except OSError:
             pass
+        forced = False
         try:
             self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            forced = True
             self.proc.kill()
             self.proc.wait()
         self._log_fd.close()
+        self._stderr_fd.close()
+        assert not forced, f"Forced kill after {timeout}s: {self.log_path}"
+        assert self.proc.returncode == self.expected_exit, f"Unexpected exit {self.proc.returncode}: {self.log_path}"
 
 
 def stop_nodes(*nodes: NodeProcess, timeout: float = 5.0) -> None:
@@ -222,8 +236,10 @@ def make_three_node_group(identities: TestIdentities):
 def await_uc_ready(nodes, ready_marker: str):
     """Wait for a use-case handshake marker on hems, then return (hp, hems)."""
     hp, hems = nodes
-    assert hems.wait_for(ready_marker, UC_READY_TIMEOUT), \
-        f"Use case not ready after {UC_READY_TIMEOUT:.0f}s: {ready_marker!r}"
+    line = hems.wait_for_new_line(ready_marker, 0, UC_READY_TIMEOUT, peer_ski=hems.remote_ski)
+    hems.peer_entity = record_entity(line)
+    if ready_marker.startswith("EG "):
+        assert hems.peer_entity is not None, f"Missing entity in readiness record: {line!r}"
     return hp, hems
 
 

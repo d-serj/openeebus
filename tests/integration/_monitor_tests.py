@@ -40,24 +40,20 @@ class MeasurementVerifier:
 
     def run(self, hp, hems, measurements):
         for name, value in measurements:
-            pos = hems.line_count()
+            pos = hems.mark()
             hp.send(f"{self.hp_prefix} set {name} {value}")
-            hems.wait_for_new(self.receive_marker(name), pos, self.propagation)
-
-        pos_hp = hp.line_count()
+            assert hems.wait_for_new(self.receive_marker(name), pos, self.propagation, entity=hems.peer_entity, expected=f"{value},")
+        pos_hp = hp.mark()
         for name, _ in measurements:
             hp.send(f"{self.hp_prefix} get {name}")
-        pos_hems = hems.line_count()
+        pos_hems = hems.mark()
         for name, _ in measurements:
             hems.send(f"{self.hems_prefix} get {name}")
 
-        last_name = measurements[-1][0]
-        hp.wait_for_new(self.hp_settle(last_name), pos_hp, self.settle)
-        hems.wait_for_new(self.hems_settle(last_name), pos_hems, self.settle)
-
         for name, expected in measurements:
-            hp_val   = parse_field(self.hp_log(hp,   name), "value")
-            hems_val = parse_field(self.hems_log(hems, name), "value")
-            print(f"  {name}: {self.hp_label}={hp_val}  {self.hems_label}={hems_val}")
-            assert hp_val   == str(expected), f"{self.hp_label} {name}: expected {expected}, got {hp_val!r}"
-            assert hems_val == str(expected), f"{self.hems_label} {name}: expected {expected}, got {hems_val!r}"
+            hp_line = hp.wait_for_new_line(self.hp_settle(name), pos_hp, self.settle)
+            hems_line = hems.wait_for_new_line(self.hems_settle(name), pos_hems, self.settle, entity=hems.peer_entity)
+            hp_val = parse_field(hp_line, "value")
+            hems_val = parse_field(hems_line, "value")
+            assert hp_val == str(expected), f"{name}: expected {expected}, got {hp_val!r}"
+            assert hems_val == str(expected), f"{name}: expected {expected}, got {hems_val!r}"

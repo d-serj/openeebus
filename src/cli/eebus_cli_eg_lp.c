@@ -19,7 +19,9 @@
  */
 
 #include <stdio.h>
+
 #include <string.h>
+#include "src/common/output_record.h"
 
 #include "src/cli/eebus_cli_eg_lp.h"
 #include "src/cli/eebus_cli_remote_arg.h"
@@ -223,10 +225,13 @@ static void HandleCmdGetPowerLimit(
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
   ScaledValuePrint("Active Power Limit: value=%s, ", &limit.value);
   EebusDurationPrint("duration=%s, ", &limit.duration);
-  printf("active=%s\n", EebusBoolToString(limit.is_active));
+  printf("active=%s", EebusBoolToString(limit.is_active));
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
 }
 
 static void HandleCmdGetFailsafeLimit(
@@ -244,8 +249,11 @@ static void HandleCmdGetFailsafeLimit(
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
-  ScaledValuePrint("Failsafe Active Power Limit: value=%s\n", &power_limit);
+  ScaledValuePrint("Failsafe Active Power Limit: value=%s", &power_limit);
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
 }
 
 static void HandleCmdGetFailsafeDuration(
@@ -263,8 +271,11 @@ static void HandleCmdGetFailsafeDuration(
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
-  EebusDurationPrint("Failsafe Duration Minimum: %s\n", &duration);
+  EebusDurationPrint("Failsafe Duration Minimum: %s", &duration);
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
 }
 
 static void HandleCmdGetPowerNominalMax(
@@ -284,8 +295,11 @@ static void HandleCmdGetPowerNominalMax(
     return;
   }
 
+  OutputRecordBegin();
   printf("%s ", self->cmd_name_caps);
-  ScaledValuePrint("Power Nominal Max: value=%s\n", &power_limit);
+  ScaledValuePrint("Power Nominal Max: value=%s", &power_limit);
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
 }
 
 static void
@@ -325,14 +339,18 @@ static void OnSetPowerLimitResult(
   const ResultDataType* const result_data = result_msg->result_data;
 
   if ((result_data == NULL) || (result_data->error_number == NULL)) {
+    OutputRecordBegin();
     printf("%s Active Power Limit result missing from ", cmd_name_caps);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
     return;
   }
 
   if (*result_data->error_number != kErrorNumberTypeNoError) {
+    OutputRecordBegin();
     printf("%s Active Power Limit result error: %u from ", cmd_name_caps, *result_data->error_number);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
   }
 }
 
@@ -383,14 +401,18 @@ static void OnSetFailsafeLimitResult(
   const ResultDataType* const result_data = result_msg->result_data;
 
   if ((result_data == NULL) || (result_data->error_number == NULL)) {
+    OutputRecordBegin();
     printf("%s Failsafe Active Power Limit result missing from ", cmd_name_caps);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
     return;
   }
 
   if (*result_data->error_number != kErrorNumberTypeNoError) {
+    OutputRecordBegin();
     printf("%s Failsafe Active Power Limit result error: %u from ", cmd_name_caps, *result_data->error_number);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
   }
 }
 
@@ -437,14 +459,18 @@ static void OnSetFailsafeDurationResult(
   const ResultDataType* const result_data = result_msg->result_data;
 
   if ((result_data == NULL) || (result_data->error_number == NULL)) {
+    OutputRecordBegin();
     printf("%s Failsafe Duration Minimum result missing from ", cmd_name_caps);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
     return;
   }
 
   if (*result_data->error_number != kErrorNumberTypeNoError) {
+    OutputRecordBegin();
     printf("%s Failsafe Duration Minimum result error: %u from ", cmd_name_caps, *result_data->error_number);
     FeatureAddressPrint("%s\n", remote_feature_addr);
+    OutputRecordEnd();
   }
 }
 

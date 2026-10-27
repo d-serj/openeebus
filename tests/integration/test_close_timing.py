@@ -30,36 +30,23 @@ DEFAULT_ITER     = 50
 CONNECT_TIMEOUT  = 60.0
 CLOSE_TIMEOUT    = 60.0
 
-# DebugPrintf timestamp: [YYYY/MM/DD HH:MM:SS:TTTT] where TTTT = tv_usec/100
-_TS_RE = re.compile(r'\[(\d{4}/\d{2}/\d{2}) (\d{2}):(\d{2}):(\d{2}):(\d{4})\]')
-
-
-
-def _ts_to_tenth_ms(h: int, m: int, s: int, t: int) -> int:
-    return h * 36_000_000 + m * 600_000 + s * 10_000 + t
+from _records import timestamp_seconds
 
 
 def _close_duration_ms(log_path: str):
     begin = end = None
-    with open(log_path) as f:
-        for line in f:
-            match = _TS_RE.search(line)
-            if not match:
+    with open(log_path) as stream:
+        for line in stream:
+            ts = timestamp_seconds(line)
+            if ts is None or not line.endswith("\n"):
                 continue
-            ts = _ts_to_tenth_ms(
-                int(match.group(2)), int(match.group(3)),
-                int(match.group(4)), int(match.group(5)),
-            )
             if "EebusService::Stop(): begin" in line:
                 begin = ts
             elif "EebusService::Destruct(): end" in line:
                 end = ts
     if begin is None or end is None:
         return None
-    delta = end - begin
-    if delta < 0:
-        delta += 864_000_000  # midnight rollover in 0.1 ms units
-    return delta // 10  # → milliseconds
+    return round(((end - begin) % 86400) * 1000)
 
 
 def _stats(values):
@@ -100,19 +87,17 @@ def _connect_and_close(hp: NodeProcess, hems: NodeProcess) -> str:
         print("  ERROR: connection timeout — skipping iteration")
         return "CONN_TIMEOUT"
 
-    hems.wait_for("EG LPC Failsafe Active Power Limit received", 10.0)
-
+    assert hems.wait_for("EG LPC Failsafe Active Power Limit received", 10.0)
     print("  LPC exchange...")
-    pos_hems = hems.line_count()
+    pos_hems = hems.mark()
     hp.send("cs_lpc set failsafe_limit 5000 true")
-    hems.wait_for_new("EG LPC Failsafe Active Power Limit received", pos_hems, 3.0)
-    pos_hems = hems.line_count()
+    assert hems.wait_for_new("EG LPC Failsafe Active Power Limit received", pos_hems, 3.0)
+    pos_hems = hems.mark()
     hp.send("cs_lpc set failsafe_duration PT2H true")
-    hems.wait_for_new("EG LPC Failsafe Duration Minimum received", pos_hems, 3.0)
-    pos_hp = hp.line_count()
+    assert hems.wait_for_new("EG LPC Failsafe Duration Minimum received", pos_hems, 3.0)
+    pos_hp = hp.mark()
     hems.send("eg_lpc set power_limit 7000 PT0S true")
-    hp.wait_for_new("CS LPC Power Limit received", pos_hp, 3.0)
-
+    assert hp.wait_for_new("CS LPC Power Limit received", pos_hp, 3.0)
     print("  Sending exit...")
     hp.send("exit")
     hems.send("exit")

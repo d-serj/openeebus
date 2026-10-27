@@ -21,10 +21,13 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "src/common/output_record.h"
+
 #include "examples/hems/hems.h"
 #include "examples/hems/ma_mpc_listener.h"
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_malloc.h"
+#include "src/common/string_util.h"
 #include "src/use_case/api/ma_mpc_listener_interface.h"
 #include "src/use_case/model/mpc_types.h"
 #include "src/use_case/model/scaled_value.h"
@@ -92,8 +95,13 @@ void Destruct(MaMpcListenerObject* self) {
 void OnRemoteMuAdded(MaMpcListenerObject* self, const EntityAddressType* entity_addr) {
   MaMpcListener* const ma_mpc_listener = MA_MPC_LISTENER(self);
 
-  printf("MA MPC remote entity connected\n");
   HemsAddMaMpcRemoteEntity(ma_mpc_listener->hems, entity_addr);
+  char* ski = HemsCopyRemoteSki(ma_mpc_listener->hems, entity_addr);
+  OutputRecordBegin();
+  printf("MA MPC remote entity connected ski=%s", ski != NULL ? ski : "unavailable");
+  EntityAddressPrint(" from entity: %s\n", entity_addr);
+  OutputRecordEnd();
+  StringDelete(ski);
 }
 
 void OnRemoteMuRemoved(MaMpcListenerObject* self, const EntityAddressType* entity_addr) {
@@ -116,7 +124,9 @@ void OnMeasurementReceive(
     return;
   }
 
+  OutputRecordBegin();
   printf("MA MPC Measurement received: %s = ", name);
   ScaledValuePrint("%s,", measurement_value);
   EntityAddressPrint(" from entity: %s\n", remote_entity_addr);
+  OutputRecordEnd();
 }

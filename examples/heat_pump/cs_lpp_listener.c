@@ -22,6 +22,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "src/common/output_record.h"
+
 #include "examples/heat_pump/cs_lpp_listener.h"
 #include "src/common/eebus_arguments.h"
 #include "src/common/eebus_date_time/eebus_date_time.h"
@@ -98,9 +100,11 @@ void OnPowerLimitReceive(
 ) {
   UNUSED(self);
 
+  OutputRecordBegin();
   ScaledValuePrint("CS LPP Power Limit received %sW, ", power_limit);
   EebusDurationPrint("duration = %s, ", duration);
   printf("active = %s\n", is_active ? "true" : "false");
+  OutputRecordEnd();
 }
 
 void OnFailsafePowerLimitReceive(CsLpListenerObject* self, const ScaledValue* power_limit) {
