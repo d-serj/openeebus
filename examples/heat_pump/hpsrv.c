@@ -498,9 +498,12 @@ static EebusError HpsrvStart(Hpsrv* hpsrv, int32_t port, const char* role, TlsCe
   }
 
   hpsrv->service = EebusServiceCreate(hpsrv->cfg, role, tls_certificate, SERVICE_READER_OBJECT(hpsrv));
+
   if (hpsrv->service == NULL) {
     return kEebusErrorInit;
   }
+
+  EEBUS_CLI_SET_PAIRING(hpsrv->cli, hpsrv->service, tls_certificate, EebusServiceConfigGetShipId(hpsrv->cfg));
 
   printf("Starting with SKI = %s\n", EEBUS_SERVICE_GET_LOCAL_SKI(hpsrv->service));
 
@@ -905,5 +908,6 @@ EebusError HpsrvSetGcpMgcpPvCurtailmentLimitFactor(HpsrvObject* self, const Scal
 
 void HpsrvHandleCmd(HpsrvObject* self, char* cmd) {
   Hpsrv* const hpsrv = HPSRV(self);
+
   EEBUS_CLI_HANDLE_CMD(hpsrv->cli, cmd);
 }

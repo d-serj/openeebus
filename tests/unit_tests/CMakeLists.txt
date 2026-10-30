@@ -36,6 +36,12 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/service/service/eebus_service
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/mdns/mdns_entry
     ${EXECUTABLE_OUTPUT_PATH}/ship/mdns/mdns_entry)
 
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/tls_certificate
+    ${EXECUTABLE_OUTPUT_PATH}/ship/tls_certificate)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/ship_pairing
+    ${EXECUTABLE_OUTPUT_PATH}/ship/ship_pairing)
+
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/ship_connection/ship_message_serialize
     ${EXECUTABLE_OUTPUT_PATH}/ship/ship_connection/ship_message_serialize)
 
@@ -71,6 +77,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/ship_node/node_connection
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/ship_node/node_connection_container
     ${EXECUTABLE_OUTPUT_PATH}/ship/ship_node/node_connection_container)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ship/ship_node/peer_recognition
+    ${EXECUTABLE_OUTPUT_PATH}/ship/ship_node/peer_recognition)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/actor/cs/lpc
     ${EXECUTABLE_OUTPUT_PATH}/use_case/actor/cs/lpc)
@@ -110,6 +119,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/actor/ma/two_remote
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/actor/mu/mpc
     ${EXECUTABLE_OUTPUT_PATH}/use_case/actor/mu/mpc)
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/model/ohpcf_types
+    ${EXECUTABLE_OUTPUT_PATH}/use_case/model/ohpcf_types)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/use_case/model/scaled_value
     ${EXECUTABLE_OUTPUT_PATH}/use_case/model/scaled_value)
