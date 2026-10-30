@@ -56,6 +56,7 @@ The source code in this repository implements the EEBUS protocol, based on the [
 * [Building on Linux](docs/build_linux.md)
 * [Building on macOS](docs/build_macos.md)
 * [Building on Windows](docs/build_windows.md)
+* [Test Layout and Commands](tests/README.md)
 * [Integration Tests](docs/integration_tests.md)
 
 ### Configuration

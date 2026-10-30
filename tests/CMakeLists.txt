@@ -91,13 +91,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" OR CMAKE_C_COMPILER_ID MATCHES "GNU
 endif()
 
 set(MAIN_PROJ_SOURCES_PATH ${OPENEEBUS_SOURCE_DIR}/src)
-set(MOCKS_SOURCES_PATH ${OPENEEBUS_TESTS_SOURCE_DIR}/src/mocks)
+set(MOCKS_SOURCES_PATH ${OPENEEBUS_TESTS_SOURCE_DIR}/unit_tests/mocks)
 
 set(PROJECT_INCLUDES_PATH
   ${GTestIncludes}
   ${OPENEEBUS_SOURCE_DIR}
-  ${OPENEEBUS_TESTS_SOURCE_DIR}/src
-  ${OPENEEBUS_TESTS_SOURCE_DIR}/src/mocks
+  ${OPENEEBUS_TESTS_SOURCE_DIR}/unit_tests
+  ${OPENEEBUS_TESTS_SOURCE_DIR}/unit_tests/mocks
 )
 
 set(GTEST_SOURCES
@@ -158,9 +158,9 @@ include(GoogleTest)
 
 enable_testing()
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)
 if(OPTION_INTEGRATION_TESTS AND TARGET heat_pump AND TARGET hems)
-  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
+  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration_tests)
 endif()
 
 set(CTEST_ARGS -V CACHE STRING "ctest arguments")

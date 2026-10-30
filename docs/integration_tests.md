@@ -1,6 +1,6 @@
 # Integration Tests
 
-The `tests/integration/` directory contains a pytest-based end-to-end test suite that runs
+The `tests/integration_tests/` directory contains a pytest-based end-to-end test suite that runs
 the `heat_pump`, `hems`, and `ev_charger` demo binaries as subprocesses, drives them via their CLI stdin
 interface, and verifies protocol behaviour by polling their log output.
 
@@ -35,7 +35,7 @@ cmake -S . -B build -DOPTION_OPENEEBUS_TESTS=ON -DOPTION_INTEGRATION_TESTS=ON
 ## TLS certificates
 
 The demos use mutual TLS authentication. The `test_identities` session fixture
-calls `tests/integration/_certificates.py` to generate fresh HP, HEMS, and EV
+calls `tests/integration_tests/_certificates.py` to generate fresh HP, HEMS, and EV
 certificates and private keys in a unique system temporary directory. Both CTest
 and direct pytest use this fixture.
 
@@ -99,7 +99,7 @@ ctest --test-dir build -L integration -LE 'stress|debug_flags' --output-on-failu
 Generate an HTML report:
 
 ```sh
-build/tests/integration/itest_venv/bin/python -m pytest tests/integration/ --ignore=tests/integration/test_close_timing.py --html=report.html --self-contained-html
+build/tests/integration_tests/itest_venv/bin/python -m pytest tests/integration_tests/ --ignore=tests/integration_tests/test_close_timing.py --html=report.html --self-contained-html
 ```
 
 Run with verbose output:
@@ -111,15 +111,15 @@ ctest --test-dir build -L integration -V
 Run the three-node scenarios directly (build `ev_charger` along with the other demos):
 
 ```sh
-build/tests/integration/itest_venv/bin/python -m pytest tests/integration/test_hems_hp_ev.py -v
+build/tests/integration_tests/itest_venv/bin/python -m pytest tests/integration_tests/test_hems_hp_ev.py -v
 ```
 
-The three-node stress module is `tests/integration/test_hems_hp_ev_stress.py`.
+The three-node stress module is `tests/integration_tests/test_hems_hp_ev_stress.py`.
 Both three-node modules have the CTest label `three_node`; stress modules also
 have `stress`, and close timing has `debug_flags`. All have `integration`.
 
-On Windows, replace `build/tests/integration/itest_venv/bin/python` in the direct
-pytest commands with `build/tests/integration/itest_venv/Scripts/python.exe`.
+On Windows, replace `build/tests/integration_tests/itest_venv/bin/python` in the direct
+pytest commands with `build/tests/integration_tests/itest_venv/Scripts/python.exe`.
 
 ---
 
@@ -148,7 +148,7 @@ process pairs independently of the shared-connection fixture used by other modul
 The number of iterations can be overridden:
 
 ```sh
-build/tests/integration/itest_venv/bin/python -m pytest tests/integration/test_close_timing.py --close-timing-iter=20
+build/tests/integration_tests/itest_venv/bin/python -m pytest tests/integration_tests/test_close_timing.py --close-timing-iter=20
 ```
 
 **Required compile-time flags:** `EEBUS_SERVICE_DEBUG=1` and `SHIP_NODE_DEBUG=1`
